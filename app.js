@@ -94,47 +94,38 @@ function _migrateFromLocalStorage() {
     });
 }
 
-// ==================== GitHub Gist 云同步层 ====================
-// 通过 GitHub Gist 免费实现多设备云同步，国内可访问
-var _GIST_TOKEN = null;    // GitHub Personal Access Token (需 gist 权限)
-var _GIST_ID = null;       // 云端 Gist ID
+// ==================== GitHub 云同步层（repo 文件存储，仅需 repo 权限） ====================
+var _SYNC_TOKEN = null;
+var _SYNC_SHA = null;       // 云端文件 SHA，用于更新
 var _SYNC_READY = false;
 var _SYNC_TIMER = null;
 var _PUSH_TIMER = null;
 var _IS_SYNCING = false;
-var _LAST_SYNC_HASH = '';  // 用于判断云端数据是否有变化
-
-function _isGistConfigured() {
-    return !!_GIST_TOKEN;
-}
+var _LAST_SYNC_HASH = '';
+var _SYNC_REPO = 'blunth206/bill-app';
+var _SYNC_PATH = '/repos/' + _SYNC_REPO + '/contents/sync-data.json';
 
 function initCloudSync() {
-    return Promise.all([
-        _IDB.getItem('billApp_gistToken'),
-        _IDB.getItem('billApp_gistId')
-    ]).then(function(results) {
-        _GIST_TOKEN = results[0] || null;
-        _GIST_ID = results[1] || null;
-        if (_GIST_TOKEN) {
+    return _IDB.getItem('billApp_syncToken').then(function(saved) {
+        _SYNC_TOKEN = saved || null;
+        if (_SYNC_TOKEN) {
             _SYNC_READY = true;
-            console.log('Gist 云同步已启用, GistID:', _GIST_ID || '(待创建)');
+            console.log('云同步已启用');
             updateSyncStatus('已连接');
             startPolling();
         } else {
             updateSyncStatus('未配置');
         }
-        // 回填 token 到设置页面
         var tokenInput = document.getElementById('gistTokenInput');
-        if (tokenInput && _GIST_TOKEN) tokenInput.value = _GIST_TOKEN;
+        if (tokenInput && _SYNC_TOKEN) tokenInput.value = _SYNC_TOKEN;
     }).catch(function() {
         updateSyncStatus('未配置');
     });
 }
 
-// 封装 GitHub API 请求
-function _gistFetch(method, path, body) {
+function _apiFetch(method, path, body) {
     var headers = {
-        'Authorization': 'token ' + _GIST_TOKEN,
+        'Authorization': 'token ' + _SYNC_TOKEN,
         'Accept': 'application/vnd.github.v3+json'
     };
     var opts = { method: method, headers: headers };
@@ -144,52 +135,14 @@ function _gistFetch(method, path, body) {
     }
     return fetch('https://api.github.com' + path, opts).then(function(r) {
         if (!r.ok) {
-            if (r.status === 401) { updateSyncStatus('Token无效'); _SYNC_READY = false; }
-            throw new Error('GitHub API ' + r.status);
+            if (r.status === 401 || r.status === 403) {
+                updateSyncStatus('Token无效');
+                _SYNC_READY = false;
+            }
+            if (r.status === 404) return null; // 文件不存在
+            throw new Error('API ' + r.status);
         }
         return r.json();
-    });
-}
-
-// 查找或创建同步 Gist
-function _findOrCreateGist(syncData) {
-    // 如果已有 Gist ID，先尝试读取
-    if (_GIST_ID) {
-        return _gistFetch('GET', '/gists/' + _GIST_ID).then(function(gist) {
-            return gist;
-        }).catch(function() {
-            // Gist 可能被删除，清除 ID 重新创建
-            _GIST_ID = null;
-            _IDB.setItem('billApp_gistId', null);
-            return _createGist(syncData);
-        });
-    }
-    // 搜索已有的同步 Gist
-    return _gistFetch('GET', '/gists?per_page=100').then(function(gists) {
-        for (var i = 0; i < gists.length; i++) {
-            if (gists[i].description === 'bill-app-sync-data') {
-                _GIST_ID = gists[i].id;
-                _IDB.setItem('billApp_gistId', _GIST_ID);
-                return gists[i];
-            }
-        }
-        // 没找到，创建新的
-        return _createGist(syncData);
-    });
-}
-
-function _createGist(syncData) {
-    return _gistFetch('POST', '/gists', {
-        description: 'bill-app-sync-data',
-        public: false,  // 私有 Gist（仅自己可见）
-        files: {
-            'billData.json': { content: JSON.stringify(syncData) }
-        }
-    }).then(function(gist) {
-        _GIST_ID = gist.id;
-        _IDB.setItem('billApp_gistId', _GIST_ID);
-        console.log('创建同步 Gist:', _GIST_ID);
-        return gist;
     });
 }
 
@@ -208,11 +161,16 @@ function syncPush() {
     var hash = _hashCode(content);
     if (hash === _LAST_SYNC_HASH) { _IS_SYNCING = false; return Promise.resolve(); }
 
-    return _findOrCreateGist(syncData).then(function() {
-        return _gistFetch('PATCH', '/gists/' + _GIST_ID, {
-            files: { 'billData.json': { content: content } }
-        });
-    }).then(function() {
+    var body = {
+        message: 'sync: ' + new Date().toLocaleString(),
+        content: btoa(unescape(encodeURIComponent(content)))
+    };
+    if (_SYNC_SHA) body.sha = _SYNC_SHA;
+
+    return _apiFetch('PUT', _SYNC_PATH, body).then(function(r) {
+        if (r && r.content && r.content.sha) {
+            _SYNC_SHA = r.content.sha;
+        }
         _LAST_SYNC_HASH = hash;
         updateSyncStatus('已同步');
     }).catch(function(e) {
@@ -233,17 +191,18 @@ function syncPushDebounced() {
 }
 
 function syncPull() {
-    if (!_SYNC_READY || _IS_SYNCING || !_GIST_ID) return Promise.resolve(false);
-    return _gistFetch('GET', '/gists/' + _GIST_ID).then(function(gist) {
-        var file = gist.files && gist.files['billData.json'];
-        if (!file || !file.content) return false;
-        var content = file.content;
+    if (!_SYNC_READY || _IS_SYNCING) return Promise.resolve(false);
+    return _apiFetch('GET', _SYNC_PATH).then(function(fileInfo) {
+        if (!fileInfo || !fileInfo.content) return false;
+        // 解码 Base64 内容
+        var content = decodeURIComponent(escape(atob(fileInfo.content.replace(/\s/g, ''))));
         var hash = _hashCode(content);
-        if (hash === _LAST_SYNC_HASH) return false; // 无变化
+        if (hash === _LAST_SYNC_HASH) return false;
         var cloudData = JSON.parse(content);
-        // 比较时间戳，云端更新才同步
         if (!cloudData.bills) return false;
-        // 合并：以 ID 为准，云端有的保留云端，本地独有的也保留
+        // 记录 SHA 供后续更新使用
+        _SYNC_SHA = fileInfo.sha;
+        // 合并：云端有的覆盖本地，本地独有的保留
         var billMap = {};
         APP_DATA.bills.forEach(function(b) { billMap[b.id] = b; });
         (cloudData.bills || []).forEach(function(b) { billMap[b.id] = b; });
@@ -270,7 +229,6 @@ function saveDataSilent() {
     }).catch(function(e) {
         console.error('数据保存失败', e);
     });
-    // 注意：不触发 syncPushDebounced，避免回环
 }
 
 function startPolling() {
@@ -279,8 +237,7 @@ function startPolling() {
         if (_SYNC_READY && APP_DATA.currentAccountId) {
             syncPull();
         }
-    }, 30000); // 每30秒轮询一次
-    // 页面可见时立即同步一次
+    }, 30000);
     document.addEventListener('visibilitychange', function() {
         if (!document.hidden && _SYNC_READY && APP_DATA.currentAccountId) {
             syncPull();
@@ -298,11 +255,10 @@ function saveGistToken() {
     var token = (input.value || '').trim();
     if (!token) {
         _SYNC_READY = false;
-        _GIST_TOKEN = null;
-        _GIST_ID = null;
+        _SYNC_TOKEN = null;
+        _SYNC_SHA = null;
         _LAST_SYNC_HASH = '';
-        _IDB.removeItem('billApp_gistToken');
-        _IDB.removeItem('billApp_gistId');
+        _IDB.removeItem('billApp_syncToken');
         updateSyncStatus('未配置');
         showToast('已清除云同步配置');
         return;
@@ -311,26 +267,22 @@ function saveGistToken() {
         showToast('Token 格式不正确，应以 ghp_ 或 github_pat_ 开头', 'error');
         return;
     }
-    _GIST_TOKEN = token;
-    _GIST_ID = null;
+    _SYNC_TOKEN = token;
+    _SYNC_SHA = null;
     _LAST_SYNC_HASH = '';
-    _IDB.setItem('billApp_gistToken', token);
-    _IDB.removeItem('billApp_gistId');
-    // 验证 token 有效性
+    _IDB.setItem('billApp_syncToken', token);
     updateSyncStatus('验证中...');
-    _gistFetch('GET', '/user').then(function(user) {
+    _apiFetch('GET', '/user').then(function(user) {
         _SYNC_READY = true;
         console.log('Token 有效，用户:', user.login);
         updateSyncStatus('已连接');
         startPolling();
         showToast('云同步已启用！用户: ' + user.login, 'success');
-        // 立即推送本地数据到云端
         syncPush();
-        // 拉取云端数据
         setTimeout(function() { syncPull(); }, 2000);
     }).catch(function() {
         _SYNC_READY = false;
-        _GIST_TOKEN = null;
+        _SYNC_TOKEN = null;
         updateSyncStatus('Token无效');
         showToast('Token 无效，请检查后重试', 'error');
     });
