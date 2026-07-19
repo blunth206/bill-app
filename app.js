@@ -151,7 +151,7 @@ function syncPush() {
     _IS_SYNCING = true;
     var syncData = {
         accounts: APP_DATA.accounts.map(function(a) {
-            return { id: a.id, name: a.name, role: a.role, createdAt: a.createdAt };
+            return { id: a.id, name: a.name, role: a.role, password: a.password, createdAt: a.createdAt };
         }),
         billUsers: APP_DATA.billUsers,
         bills: APP_DATA.bills,
@@ -207,7 +207,21 @@ function syncPull() {
         APP_DATA.bills.forEach(function(b) { billMap[b.id] = b; });
         (cloudData.bills || []).forEach(function(b) { billMap[b.id] = b; });
         APP_DATA.bills = Object.values(billMap);
-        APP_DATA.accounts = cloudData.accounts || APP_DATA.accounts;
+        // 合并账号：保留本地密码，云端密码不为空时才覆盖
+        var localAccMap = {};
+        APP_DATA.accounts.forEach(function(a) { localAccMap[a.id] = a; });
+        (cloudData.accounts || []).forEach(function(ca) {
+            if (!localAccMap[ca.id]) {
+                localAccMap[ca.id] = ca;
+            } else {
+                // 云端有数据时合并，但保留本地密码（如果云端没带密码）
+                localAccMap[ca.id].name = ca.name;
+                localAccMap[ca.id].role = ca.role;
+                if (ca.password) localAccMap[ca.id].password = ca.password;
+                localAccMap[ca.id].createdAt = ca.createdAt || localAccMap[ca.id].createdAt;
+            }
+        });
+        APP_DATA.accounts = Object.values(localAccMap);
         APP_DATA.billUsers = cloudData.billUsers || APP_DATA.billUsers;
         _LAST_SYNC_HASH = hash;
         saveDataSilent();
