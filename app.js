@@ -1,5 +1,362 @@
-// ==================== 数据存储层 ====================
-// 全局错误捕获
+// ==================== IndexedDB 存储层（替代 localStorage，容量近乎无限） ====================
+var _IDB = (function() {
+    var DB_NAME = 'BillAppDB';
+    var DB_VERSION = 1;
+    var STORE_NAME = 'kvStore';
+    var _db = null;
+
+    function open() {
+        return new Promise(function(resolve, reject) {
+            if (_db) return resolve(_db);
+            var req = indexedDB.open(DB_NAME, DB_VERSION);
+            req.onupgradeneeded = function(e) {
+                var db = e.target.result;
+                if (!db.objectStoreNames.contains(STORE_NAME)) {
+                    db.createObjectStore(STORE_NAME);
+                }
+            };
+            req.onsuccess = function(e) { _db = e.target.result; resolve(_db); };
+            req.onerror = function(e) { reject(e.target.error); };
+        });
+    }
+
+    return {
+        getItem: function(key) {
+            return open().then(function(db) {
+                return new Promise(function(resolve, reject) {
+                    var tx = db.transaction(STORE_NAME, 'readonly');
+                    var store = tx.objectStore(STORE_NAME);
+                    var req = store.get(key);
+                    req.onsuccess = function() { resolve(req.result || null); };
+                    req.onerror = function() { reject(req.error); };
+                });
+            });
+        },
+        setItem: function(key, value) {
+            return open().then(function(db) {
+                return new Promise(function(resolve, reject) {
+                    var tx = db.transaction(STORE_NAME, 'readwrite');
+                    var store = tx.objectStore(STORE_NAME);
+                    var req = store.put(value, key);
+                    req.onsuccess = function() { resolve(); };
+                    req.onerror = function() { reject(req.error); };
+                });
+            });
+        },
+        removeItem: function(key) {
+            return open().then(function(db) {
+                return new Promise(function(resolve, reject) {
+                    var tx = db.transaction(STORE_NAME, 'readwrite');
+                    var store = tx.objectStore(STORE_NAME);
+                    var req = store.delete(key);
+                    req.onsuccess = function() { resolve(); };
+                    req.onerror = function() { reject(req.error); };
+                });
+            });
+        }
+    };
+})();
+
+// 内存缓存（减少 IDB 读取）
+var _CACHE = { cred: null, lastAcct: null };
+var _COL_WIDTH_CACHE = {};
+
+// 首次加载：从 localStorage 迁移到 IndexedDB
+function _migrateFromLocalStorage() {
+    return _IDB.getItem('billApp_data').then(function(existing) {
+        if (existing) return; // 已有数据，无需迁移
+        try {
+            var raw = localStorage.getItem('billApp_data');
+            if (raw) {
+                var data = JSON.parse(raw);
+                var promises = [];
+                promises.push(_IDB.setItem('billApp_data', data));
+                // 迁移凭据
+                var cred = localStorage.getItem('billApp_savedCred');
+                if (cred) promises.push(_IDB.setItem('billApp_savedCred', cred));
+                var lastAcct = localStorage.getItem('billApp_lastAccount');
+                if (lastAcct) promises.push(_IDB.setItem('billApp_lastAccount', lastAcct));
+                // 迁移列宽
+                var keys = Object.keys(localStorage).filter(function(k) { return k.indexOf('billColWidths_') === 0; });
+                keys.forEach(function(k) { promises.push(_IDB.setItem(k, localStorage.getItem(k))); });
+                return Promise.all(promises).then(function() {
+                    // 清理 localStorage
+                    localStorage.removeItem('billApp_data');
+                    localStorage.removeItem('billApp_savedCred');
+                    localStorage.removeItem('billApp_lastAccount');
+                    keys.forEach(function(k) { localStorage.removeItem(k); });
+                    console.log('数据已从 localStorage 迁移到 IndexedDB');
+                });
+            }
+        } catch(e) {
+            console.error('数据迁移失败', e);
+        }
+    });
+}
+
+// ==================== GitHub Gist 云同步层 ====================
+// 通过 GitHub Gist 免费实现多设备云同步，国内可访问
+var _GIST_TOKEN = null;    // GitHub Personal Access Token (需 gist 权限)
+var _GIST_ID = null;       // 云端 Gist ID
+var _SYNC_READY = false;
+var _SYNC_TIMER = null;
+var _PUSH_TIMER = null;
+var _IS_SYNCING = false;
+var _LAST_SYNC_HASH = '';  // 用于判断云端数据是否有变化
+
+function _isGistConfigured() {
+    return !!_GIST_TOKEN;
+}
+
+function initCloudSync() {
+    return Promise.all([
+        _IDB.getItem('billApp_gistToken'),
+        _IDB.getItem('billApp_gistId')
+    ]).then(function(results) {
+        _GIST_TOKEN = results[0] || null;
+        _GIST_ID = results[1] || null;
+        if (_GIST_TOKEN) {
+            _SYNC_READY = true;
+            console.log('Gist 云同步已启用, GistID:', _GIST_ID || '(待创建)');
+            updateSyncStatus('已连接');
+            startPolling();
+        } else {
+            updateSyncStatus('未配置');
+        }
+        // 回填 token 到设置页面
+        var tokenInput = document.getElementById('gistTokenInput');
+        if (tokenInput && _GIST_TOKEN) tokenInput.value = _GIST_TOKEN;
+    }).catch(function() {
+        updateSyncStatus('未配置');
+    });
+}
+
+// 封装 GitHub API 请求
+function _gistFetch(method, path, body) {
+    var headers = {
+        'Authorization': 'token ' + _GIST_TOKEN,
+        'Accept': 'application/vnd.github.v3+json'
+    };
+    var opts = { method: method, headers: headers };
+    if (body) {
+        headers['Content-Type'] = 'application/json';
+        opts.body = JSON.stringify(body);
+    }
+    return fetch('https://api.github.com' + path, opts).then(function(r) {
+        if (!r.ok) {
+            if (r.status === 401) { updateSyncStatus('Token无效'); _SYNC_READY = false; }
+            throw new Error('GitHub API ' + r.status);
+        }
+        return r.json();
+    });
+}
+
+// 查找或创建同步 Gist
+function _findOrCreateGist(syncData) {
+    // 如果已有 Gist ID，先尝试读取
+    if (_GIST_ID) {
+        return _gistFetch('GET', '/gists/' + _GIST_ID).then(function(gist) {
+            return gist;
+        }).catch(function() {
+            // Gist 可能被删除，清除 ID 重新创建
+            _GIST_ID = null;
+            _IDB.setItem('billApp_gistId', null);
+            return _createGist(syncData);
+        });
+    }
+    // 搜索已有的同步 Gist
+    return _gistFetch('GET', '/gists?per_page=100').then(function(gists) {
+        for (var i = 0; i < gists.length; i++) {
+            if (gists[i].description === 'bill-app-sync-data') {
+                _GIST_ID = gists[i].id;
+                _IDB.setItem('billApp_gistId', _GIST_ID);
+                return gists[i];
+            }
+        }
+        // 没找到，创建新的
+        return _createGist(syncData);
+    });
+}
+
+function _createGist(syncData) {
+    return _gistFetch('POST', '/gists', {
+        description: 'bill-app-sync-data',
+        public: false,  // 私有 Gist（仅自己可见）
+        files: {
+            'billData.json': { content: JSON.stringify(syncData) }
+        }
+    }).then(function(gist) {
+        _GIST_ID = gist.id;
+        _IDB.setItem('billApp_gistId', _GIST_ID);
+        console.log('创建同步 Gist:', _GIST_ID);
+        return gist;
+    });
+}
+
+function syncPush() {
+    if (!_SYNC_READY || _IS_SYNCING) return Promise.resolve();
+    _IS_SYNCING = true;
+    var syncData = {
+        accounts: APP_DATA.accounts.map(function(a) {
+            return { id: a.id, name: a.name, role: a.role, createdAt: a.createdAt };
+        }),
+        billUsers: APP_DATA.billUsers,
+        bills: APP_DATA.bills,
+        updatedAt: new Date().toISOString()
+    };
+    var content = JSON.stringify(syncData);
+    var hash = _hashCode(content);
+    if (hash === _LAST_SYNC_HASH) { _IS_SYNCING = false; return Promise.resolve(); }
+
+    return _findOrCreateGist(syncData).then(function() {
+        return _gistFetch('PATCH', '/gists/' + _GIST_ID, {
+            files: { 'billData.json': { content: content } }
+        });
+    }).then(function() {
+        _LAST_SYNC_HASH = hash;
+        updateSyncStatus('已同步');
+    }).catch(function(e) {
+        console.error('云同步上传失败:', e);
+        updateSyncStatus('同步失败');
+    }).finally(function() {
+        _IS_SYNCING = false;
+    });
+}
+
+function syncPushDebounced() {
+    if (!_SYNC_READY) return;
+    updateSyncStatus('同步中...');
+    clearTimeout(_PUSH_TIMER);
+    _PUSH_TIMER = setTimeout(function() {
+        syncPush();
+    }, 1500);
+}
+
+function syncPull() {
+    if (!_SYNC_READY || _IS_SYNCING || !_GIST_ID) return Promise.resolve(false);
+    return _gistFetch('GET', '/gists/' + _GIST_ID).then(function(gist) {
+        var file = gist.files && gist.files['billData.json'];
+        if (!file || !file.content) return false;
+        var content = file.content;
+        var hash = _hashCode(content);
+        if (hash === _LAST_SYNC_HASH) return false; // 无变化
+        var cloudData = JSON.parse(content);
+        // 比较时间戳，云端更新才同步
+        if (!cloudData.bills) return false;
+        // 合并：以 ID 为准，云端有的保留云端，本地独有的也保留
+        var billMap = {};
+        APP_DATA.bills.forEach(function(b) { billMap[b.id] = b; });
+        (cloudData.bills || []).forEach(function(b) { billMap[b.id] = b; });
+        APP_DATA.bills = Object.values(billMap);
+        APP_DATA.accounts = cloudData.accounts || APP_DATA.accounts;
+        APP_DATA.billUsers = cloudData.billUsers || APP_DATA.billUsers;
+        _LAST_SYNC_HASH = hash;
+        saveDataSilent();
+        console.log('拉取 ' + (cloudData.bills || []).length + ' 条云端账单');
+        updateSyncStatus('已同步');
+        if (APP_DATA.currentAccountId) renderHomeView();
+        return true;
+    }).catch(function(e) {
+        console.error('云同步下载失败:', e);
+        return false;
+    });
+}
+
+function saveDataSilent() {
+    _IDB.setItem('billApp_data', {
+        accounts: APP_DATA.accounts,
+        billUsers: APP_DATA.billUsers,
+        bills: APP_DATA.bills,
+    }).catch(function(e) {
+        console.error('数据保存失败', e);
+    });
+    // 注意：不触发 syncPushDebounced，避免回环
+}
+
+function startPolling() {
+    stopPolling();
+    _SYNC_TIMER = setInterval(function() {
+        if (_SYNC_READY && APP_DATA.currentAccountId) {
+            syncPull();
+        }
+    }, 30000); // 每30秒轮询一次
+    // 页面可见时立即同步一次
+    document.addEventListener('visibilitychange', function() {
+        if (!document.hidden && _SYNC_READY && APP_DATA.currentAccountId) {
+            syncPull();
+        }
+    });
+}
+
+function stopPolling() {
+    if (_SYNC_TIMER) { clearInterval(_SYNC_TIMER); _SYNC_TIMER = null; }
+}
+
+// 设置页：保存 Token
+function saveGistToken() {
+    var input = document.getElementById('gistTokenInput');
+    var token = (input.value || '').trim();
+    if (!token) {
+        _SYNC_READY = false;
+        _GIST_TOKEN = null;
+        _GIST_ID = null;
+        _LAST_SYNC_HASH = '';
+        _IDB.removeItem('billApp_gistToken');
+        _IDB.removeItem('billApp_gistId');
+        updateSyncStatus('未配置');
+        showToast('已清除云同步配置');
+        return;
+    }
+    if (!token.startsWith('ghp_') && !token.startsWith('github_pat_')) {
+        showToast('Token 格式不正确，应以 ghp_ 或 github_pat_ 开头', 'error');
+        return;
+    }
+    _GIST_TOKEN = token;
+    _GIST_ID = null;
+    _LAST_SYNC_HASH = '';
+    _IDB.setItem('billApp_gistToken', token);
+    _IDB.removeItem('billApp_gistId');
+    // 验证 token 有效性
+    updateSyncStatus('验证中...');
+    _gistFetch('GET', '/user').then(function(user) {
+        _SYNC_READY = true;
+        console.log('Token 有效，用户:', user.login);
+        updateSyncStatus('已连接');
+        startPolling();
+        showToast('云同步已启用！用户: ' + user.login, 'success');
+        // 立即推送本地数据到云端
+        syncPush();
+        // 拉取云端数据
+        setTimeout(function() { syncPull(); }, 2000);
+    }).catch(function() {
+        _SYNC_READY = false;
+        _GIST_TOKEN = null;
+        updateSyncStatus('Token无效');
+        showToast('Token 无效，请检查后重试', 'error');
+    });
+}
+
+function _hashCode(str) {
+    var hash = 0;
+    for (var i = 0; i < str.length; i++) {
+        var chr = str.charCodeAt(i);
+        hash = ((hash << 5) - hash) + chr;
+        hash |= 0;
+    }
+    return hash.toString();
+}
+
+function updateSyncStatus(status) {
+    var el = document.getElementById('syncStatus');
+    if (!el) return;
+    el.textContent = status;
+    el.className = 'sync-status';
+    if (status === '已同步' || status === '已连接') el.className += ' sync-ok';
+    else if (status === '同步中...' || status === '验证中...') el.className += ' sync-pending';
+    else if (status === '同步失败' || status === '连接失败' || status === 'Token无效') el.className += ' sync-error';
+}
+
+// ==================== 数据存储层 (IndexedDB) ====================
 window.addEventListener('error', function(e) {
     var msg = e.message || (e.error && e.error.message) || '未知错误';
     console.error('全局错误:', msg, '文件:', e.filename, '行:', e.lineno);
@@ -17,7 +374,6 @@ window.addEventListener('error', function(e) {
 window.addEventListener('unhandledrejection', function(e) {
     console.error('未处理的Promise错误:', e.reason);
 });
-const STORAGE_KEY = 'billApp_data';
 const APP_DATA = {
     accounts: [],       // 登录账号 [{id, name, password, role, createdAt}]
     billUsers: [],      // 账单户 [{id, name, color, createdAt}]
@@ -26,36 +382,39 @@ const APP_DATA = {
 };
 
 function saveData() {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({
+    _IDB.setItem('billApp_data', {
         accounts: APP_DATA.accounts,
         billUsers: APP_DATA.billUsers,
         bills: APP_DATA.bills,
-    }));
+    }).catch(function(e) {
+        console.error('数据保存失败', e);
+    });
+    // 同步到云端
+    syncPushDebounced();
 }
 
 function loadData() {
-    try {
-        const raw = localStorage.getItem(STORAGE_KEY);
-        if (raw) {
-            const data = JSON.parse(raw);
+    return _IDB.getItem('billApp_data').then(function(data) {
+        if (data) {
             APP_DATA.accounts = data.accounts || [];
             APP_DATA.billUsers = data.billUsers || [];
             APP_DATA.bills = data.bills || [];
         }
-    } catch (e) {
+    }).catch(function(e) {
         console.error('数据加载失败', e);
-    }
-    // 确保至少有默认管理员账号
-    if (APP_DATA.accounts.length === 0) {
-        APP_DATA.accounts.push({
-            id: 'admin_' + Date.now(),
-            name: '管理员',
-            password: '123456',
-            role: 'admin',
-            createdAt: new Date().toISOString()
-        });
-        saveData();
-    }
+    }).then(function() {
+        // 确保至少有默认管理员账号
+        if (APP_DATA.accounts.length === 0) {
+            APP_DATA.accounts.push({
+                id: 'admin_' + Date.now(),
+                name: '管理员',
+                password: '123456',
+                role: 'admin',
+                createdAt: new Date().toISOString()
+            });
+            saveData();
+        }
+    });
 }
 
 function generateId(prefix) {
@@ -102,13 +461,13 @@ function initLogin() {
         sel.appendChild(opt);
     });
     // 恢复上次登录账号和记住的密码
-    var lastId = localStorage.getItem('billApp_lastAccount');
-    var savedCred = localStorage.getItem('billApp_savedCred');
+    var lastId = _CACHE.lastAcct;
+    var savedCred = _CACHE.cred;
     var autoFillPassword = '';
     var rememberChecked = false;
     if (savedCred) {
         try {
-            var cred = JSON.parse(savedCred);
+            var cred = typeof savedCred === 'string' ? JSON.parse(savedCred) : savedCred;
             if (cred.id && cred.pw) {
                 lastId = cred.id;
                 autoFillPassword = atob(cred.pw);
@@ -164,14 +523,16 @@ function doLogin(auto) {
     APP_DATA.currentAccountId = accountId;
     // 记住密码：保存账号ID和密码（Base64编码）
     if (remember) {
-        localStorage.setItem('billApp_savedCred', JSON.stringify({
-            id: accountId,
-            pw: btoa(password)
-        }));
-        localStorage.setItem('billApp_lastAccount', accountId);
+        var cred = JSON.stringify({ id: accountId, pw: btoa(password) });
+        _CACHE.cred = cred;
+        _IDB.setItem('billApp_savedCred', cred);
+        _CACHE.lastAcct = accountId;
+        _IDB.setItem('billApp_lastAccount', accountId);
     } else {
-        localStorage.removeItem('billApp_savedCred');
-        localStorage.setItem('billApp_lastAccount', accountId);
+        _CACHE.cred = null;
+        _IDB.removeItem('billApp_savedCred');
+        _CACHE.lastAcct = accountId;
+        _IDB.setItem('billApp_lastAccount', accountId);
     }
     document.getElementById('loginOverlay').style.display = 'none';
     document.getElementById('appMain').style.display = 'block';
@@ -180,6 +541,16 @@ function doLogin(auto) {
         showToast('欢迎回来，' + account.name + '！', 'success');
     }
     switchView('home');
+
+    // 从云端拉取最新数据
+    syncPull().then(function(hasCloudData) {
+        if (!hasCloudData) {
+            // 云端无数据，把本地数据推上去
+            syncPush();
+        }
+        startPolling();
+        renderHomeView();
+    });
 }
 
 function doLogout() {
@@ -517,9 +888,13 @@ function getColWidthsKey() {
 }
 
 function loadColumnWidths() {
+    // 优先从缓存读取（已在 init 时预加载）
+    var cachedWidths = _COL_WIDTH_CACHE[getColWidthsKey()];
+    if (cachedWidths) return cachedWidths;
+    // 回退：同步读取缓存
     try {
-        var raw = localStorage.getItem(getColWidthsKey());
-        return raw ? JSON.parse(raw) : {};
+        var raw = _COL_WIDTH_CACHE[getColWidthsKey()];
+        return raw ? raw : {};
     } catch (e) { return {}; }
 }
 
@@ -532,8 +907,9 @@ function saveColumnWidths() {
         var key = col.getAttribute('data-col');
         if (key) widths[key] = parseInt(col.style.width) || COLUMN_DEFAULTS[key] || 80;
     });
+    _COL_WIDTH_CACHE[getColWidthsKey()] = widths;
     try {
-        localStorage.setItem(getColWidthsKey(), JSON.stringify(widths));
+        _IDB.setItem(getColWidthsKey(), JSON.stringify(widths)).catch(function(e) {});
     } catch (e) {}
 }
 
@@ -3440,14 +3816,29 @@ function parseOCRText(text, userId) {
 
 // ==================== 初始化 ====================
 function init() {
-    loadData();
-    initLogin();
+    // 初始化云同步，再迁移旧数据，再加载
+    initCloudSync().then(function() {
+        return _migrateFromLocalStorage();
+    }).then(function() {
+        return Promise.all([
+            loadData(),
+            _IDB.getItem('billApp_lastAccount').then(function(v) { _CACHE.lastAcct = v; }),
+            _IDB.getItem('billApp_savedCred').then(function(v) { _CACHE.cred = v; }),
+        ]);
+    }).then(function() {
+        // 预加载列宽缓存
+        return _IDB.getItem(getColWidthsKey()).then(function(raw) {
+            if (raw) _COL_WIDTH_CACHE[getColWidthsKey()] = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        }).catch(function() {});
+    }).then(function() {
+        initLogin();
 
-    // 检查是否已登录
-    var lastId = localStorage.getItem('billApp_lastAccount');
-    if (lastId && APP_DATA.accounts.find(function(a) { return a.id === lastId; })) {
-        // 用户之前登录过，显示登录界面
-    }
+        // 检查是否已登录
+        var lastId = _CACHE.lastAcct;
+        if (lastId && APP_DATA.accounts.find(function(a) { return a.id === lastId; })) {
+            // 用户之前登录过，显示登录界面
+        }
+    });
 }
 
 // 页面加载完成后初始化
