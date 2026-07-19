@@ -1,5 +1,5 @@
 // Service Worker - PWA 离线缓存（v3：核心文件改为网络优先，避免旧代码长期缓存）
-const CACHE_NAME = 'jizhang-v6';
+const CACHE_NAME = 'jizhang-v7';
 const FILES_TO_CACHE = [
   '.',
   'index.html',
