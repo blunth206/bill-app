@@ -87,7 +87,7 @@
                 <button class="btn btn-primary login-btn" onclick="doLogin()">🔐 登录</button>
                 <p class="login-hint" id="loginError" style="display:none;color:var(--danger);"></p>
                 <div class="login-extra">
-                    <a href="javascript:void(0)" onclick="showForgotPassword()">忘记密码？</a>
+                    <a href="javascript:void(0)" onclick="__showForgot();return false;">忘记密码？</a>
                 </div>
             </div>
         </div>
@@ -107,7 +107,7 @@
             </div>
             <div class="modal-footer">
                 <button class="btn btn-outline" onclick="closeModal('forgotPasswordModal')">关闭</button>
-                <button class="btn btn-danger" onclick="resetAllPasswords()">🔄 重置所有密码</button>
+                <button class="btn btn-danger" onclick="__resetAll();return false;">🔄 重置所有密码</button>
             </div>
         </div>
     </div>
@@ -752,5 +752,35 @@
     <div class="toast" id="toast"></div>
 
     <script src="app.js?v=10"></script>
+    <script>
+    (function(){
+        function showForgot(){
+            var el=document.getElementById('forgotAccountList');
+            if(!el||typeof APP_DATA==='undefined'){alert('页面加载中，请刷新后重试');return;}
+            var h='<p style="font-size:13px;color:#666;margin-bottom:12px;">密码将被重置为 <b>123456</b>：</p><ul style="list-style:none;padding:0;">';
+            APP_DATA.accounts.forEach(function(a){h+='<li style="padding:6px 0;border-bottom:1px solid #eee;"><strong>'+a.name+'</strong>'+(a.role==='admin'?' <span style="color:#E65100;">(管理员)</span>':'')+'</li>';});
+            h+='</ul>';el.innerHTML=h;
+            if(typeof openModal==='function')openModal('forgotPasswordModal');else alert('弹窗功能未就绪，请刷新页面');
+        }
+        function resetAll(){
+            if(typeof APP_DATA==='undefined'){alert('数据未就绪');return;}
+            APP_DATA.accounts.forEach(function(a){a.password='123456';});
+            if(typeof _CACHE!=='undefined')_CACHE.cred=null;
+            if(typeof _IDB!=='undefined'&&typeof saveData==='function'){
+                _IDB.removeItem('billApp_savedCred').then(function(){return saveData();}).then(function(){
+                    if(typeof closeModal==='function')closeModal('forgotPasswordModal');
+                    document.getElementById('loginPassword').value='';
+                    if(document.getElementById('loginRemember'))document.getElementById('loginRemember').checked=false;
+                    if(typeof showToast==='function')showToast('密码已重置为 123456，请登录','success');else alert('密码已重置为 123456！');
+                }).catch(function(){if(typeof showToast==='function')showToast('重置失败，刷新重试','error');});
+            }else{
+                APP_DATA.accounts.forEach(function(a){a.password='123456';});
+                alert('密码已重置为 123456！请刷新页面登录。');
+            }
+        }
+        window.__showForgot=showForgot;
+        window.__resetAll=resetAll;
+    })();
+    </script>
 </body>
 </html>
