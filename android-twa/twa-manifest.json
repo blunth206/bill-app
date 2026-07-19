@@ -1,0 +1,26 @@
+{
+  "packageId": "com.jizhang.app",
+  "host": "mynotes-dp0d3o9jw5yd.edgeone.cool",
+  "name": "记账",
+  "launcherName": "记账",
+  "display": "standalone",
+  "themeColor": "#4A90D9",
+  "backgroundColor": "#F5F7FA",
+  "startUrl": "https://mynotes-dp0d3o9jw5yd.edgeone.cool?eo_token=d1028775fbebe781eacad9e0788c0734&eo_time=1784333182",
+  "iconUrl": "https://mynotes-dp0d3o9jw5yd.edgeone.cool/favicon.ico",
+  "maskableIconUrl": "https://mynotes-dp0d3o9jw5yd.edgeone.cool/favicon.ico",
+  "navigationColor": "#4A90D9",
+  "navigationColorDark": "#4A90D9",
+  "navigationDividerColor": "#4A90D9",
+  "navigationDividerColorDark": "#4A90D9",
+  "enableSiteSettingsShortcut": true,
+  "fallbackType": "customtabs",
+  "features": {
+    "locationDelegation": {
+      "enabled": false
+    },
+    "playBilling": {
+      "enabled": false
+    }
+  }
+}
