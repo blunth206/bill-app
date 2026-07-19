@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cache Fix</title>
+<style>
+body{font-family:system-ui,sans-serif;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0;background:#f5f5f5}
+.card{background:#fff;border-radius:16px;padding:32px 24px;max-width:360px;width:90%;text-align:center;box-shadow:0 2px 12px rgba(0,0,0,.1)}
+h2{margin:0 0 8px;color:#333}
+p{color:#666;font-size:14px;margin:0 0 24px;line-height:1.6}
+.btn{display:inline-block;padding:12px 32px;background:#4A90D9;color:#fff;border:none;border-radius:8px;font-size:16px;cursor:pointer}
+.btn:active{background:#3a7bc8}
+#status{margin-top:16px;font-size:13px;color:#888}
+.ok{color:#4caf50}
+</style>
+</head>
+<body>
+<div class="card">
+<h2>Cache Repair Tool</h2>
+<p>This will only clear old cache.<br><b>Your data will NOT be deleted.</b></p>
+<button class="btn" onclick="fix()">Clear Cache & Reload</button>
+<div id="status"></div>
+</div>
+<script>
+async function fix(){
+  var s=document.getElementById('status');
+  s.innerText='Clearing...';
+  try{
+    var regs=await navigator.serviceWorker.getRegistrations();
+    for(var i=0;i<regs.length;i++){await regs[i].unregister();}
+    var keys=await caches.keys();
+    for(var j=0;j<keys.length;j++){await caches.delete(keys[j]);}
+    s.className='ok';s.innerText='Done! Redirecting...';
+    setTimeout(function(){window.location.href='/bill-app/';},1000);
+  }catch(e){
+    s.innerText='Error: '+e.message;
+  }
+}
+</script>
+</body>
+</html>
