@@ -2103,6 +2103,23 @@ div[id*="eop-banner"],
     color: var(--text);
 }
 
+/* ========== 云同步状态 ========== */
+.sync-status {
+    font-size: 13px;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 12px;
+    color: #888;
+    background: #f0f0f0;
+}
+.sync-status.sync-ok { color: #22c55e; background: #f0fdf4; }
+.sync-status.sync-pending { color: #f59e0b; background: #fffbeb; animation: pulse 1.5s infinite; }
+.sync-status.sync-error { color: #ef4444; background: #fef2f2; }
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
 .box-tool-btn.primary {
     border-color: var(--primary);
     color: var(--primary);
