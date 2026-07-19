@@ -250,21 +250,21 @@
                 <div class="section-header">
                     <h2>🔗 云同步</h2>
                 </div>
-                <p class="section-desc">通过 GitHub Gist 免费实现多设备数据同步，国内可直接访问</p>
+                <p class="section-desc">通过 GitHub 仓库免费实现多设备数据同步，仅需 repo 权限</p>
                 <div style="display:flex;align-items:center;gap:10px;padding:12px 16px;background:var(--card-bg);border-radius:10px;margin-top:8px;">
                     <span>同步状态：</span>
                     <span id="syncStatus" class="sync-status">初始化中...</span>
                 </div>
                 <div style="margin-top:12px;">
-                    <label style="font-size:13px;color:var(--text-secondary);display:block;margin-bottom:4px;">GitHub Token（需勾选 gist 权限）</label>
+                    <label style="font-size:13px;color:var(--text-secondary);display:block;margin-bottom:4px;">GitHub Token（需勾选 repo 权限）</label>
                     <div style="display:flex;gap:8px;">
                         <input type="password" id="gistTokenInput" placeholder="ghp_xxxxxxxxxxxx" style="flex:1;padding:8px 12px;border:1px solid var(--border);border-radius:8px;font-size:13px;font-family:monospace;">
                         <button class="btn btn-primary" onclick="saveGistToken()" style="white-space:nowrap;">保存</button>
                     </div>
                 </div>
                 <p class="hint" style="margin-top:8px;">
-                    在 <a href="https://github.com/settings/tokens/new" target="_blank" style="color:var(--primary);">github.com/settings/tokens/new</a> 生成 Token，勾选 <b>gist</b> 权限即可。<br>
-                    所有设备输入相同 Token 后自动同步，数据以私有 Gist 存储，仅自己可见。
+                    在 <a href="https://github.com/settings/tokens/new" target="_blank" style="color:var(--primary);">github.com/settings/tokens/new</a> 生成 Token，勾选 <b>repo</b> 权限即可。<br>
+                    所有设备输入相同 Token 后自动同步，数据存储在仓库文件中。
                 </p>
             </section>
         </main>
