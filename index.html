@@ -35,7 +35,7 @@
         }
     </script>
     <script>
-        if ('serviceWorker' in navigator) { navigator.serviceWorker.register('sw.js?v=6').catch(() => {}); }
+        if ('serviceWorker' in navigator) { navigator.serviceWorker.register('sw.js?v=7').catch(() => {}); }
         (function removeSafetyBanner() {
             const observer = new MutationObserver(function() {
                 const banners = document.querySelectorAll('div[style*="fixed"]');
