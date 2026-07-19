@@ -517,7 +517,8 @@ function doLogout() {
 
 function showForgotPassword() {
     var listEl = document.getElementById('forgotAccountList');
-    var html = '<ul style="list-style:none;padding:0;">';
+    var html = '<p style="font-size:13px;color:var(--text-secondary);margin-bottom:12px;">以下账号的密码将被重置为 <b>123456</b>：</p>';
+    html += '<ul style="list-style:none;padding:0;">';
     APP_DATA.accounts.forEach(function(acc) {
         html += '<li style="padding:6px 0;border-bottom:1px solid #eee;">' +
             '<strong>' + acc.name + '</strong>' +
@@ -527,6 +528,23 @@ function showForgotPassword() {
     html += '</ul>';
     listEl.innerHTML = html;
     openModal('forgotPasswordModal');
+}
+
+function resetAllPasswords() {
+    APP_DATA.accounts.forEach(function(acc) {
+        acc.password = '123456';
+    });
+    _CACHE.cred = null;
+    _IDB.removeItem('billApp_savedCred').then(function() {
+        return saveData();
+    }).then(function() {
+        closeModal('forgotPasswordModal');
+        document.getElementById('loginPassword').value = '';
+        document.getElementById('loginRemember').checked = false;
+        showToast('密码已重置为 123456，请登录', 'success');
+    }).catch(function() {
+        showToast('重置失败，请刷新后重试', 'error');
+    });
 }
 
 // ==================== 视图切换 ====================
