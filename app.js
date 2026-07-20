@@ -4189,13 +4189,8 @@ function init() {
 // 页面加载完成后初始化
 document.addEventListener('DOMContentLoaded', function() {
     // 输出版本号，方便确认是否加载到最新代码
-    console.log('[记账App] 版本 v21 | ' + new Date().toISOString());
+    console.log('[记账App] 版本 v24 | ' + new Date().toISOString());
     init();
-    // 手机端浏览器内展示PWA引导条（独立模式自动隐藏）
-    var banner = document.getElementById('pwaInstallBanner');
-    if (banner && !window.matchMedia('(display-mode: standalone)').matches) {
-        setTimeout(function() { banner.style.display = 'flex'; }, 2000);
-    }
 });
 
 // 点击弹窗遮罩关闭
