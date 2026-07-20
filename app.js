@@ -705,7 +705,10 @@ function doLogout() {
     document.getElementById('loginOverlay').style.display = 'flex';
     document.getElementById('appMain').style.display = 'none';
     document.getElementById('loginPassword').value = '';
-    // 不清除记住的密码，退出后重新显示登录界面
+    // 清除记住的密码，允许更换账号登录
+    _CACHE.cred = null;
+    _IDB.removeItem('billApp_savedCred');
+    document.getElementById('loginRemember').checked = false;
     initLogin();
     showToast('已退出登录');
 }
@@ -4145,6 +4148,16 @@ function init() {
 // 页面加载完成后初始化
 document.addEventListener('DOMContentLoaded', function() {
     init();
+    // 手机端浏览器内提示添加到主屏幕（PWA已安装则不显示）
+    if (window.matchMedia('(display-mode: standalone)').matches) {
+        // PWA模式，隐藏引导条
+    } else if (/Mobi|Android|iPhone|iPad/i.test(navigator.userAgent)) {
+        var banner = document.getElementById('pwaInstallBanner');
+        if (banner) {
+            // 延迟显示，避免干扰首次加载
+            setTimeout(function() { banner.style.display = 'flex'; }, 2000);
+        }
+    }
 });
 
 // 点击弹窗遮罩关闭
