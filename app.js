@@ -1651,6 +1651,71 @@ function renderSettingsView() {
     renderBillUserGrid();
 }
 
+// ==================== 数据备份 ====================
+function exportAllData() {
+    var backup = {
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        accounts: APP_DATA.accounts,
+        billUsers: APP_DATA.billUsers,
+        bills: APP_DATA.bills
+    };
+    var blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = '记账数据备份_' + new Date().toISOString().slice(0, 10) + '.json';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    showToast('数据已导出', 'success');
+}
+
+function importAllData(input) {
+    var file = input.files[0];
+    if (!file) return;
+    var reader = new FileReader();
+    reader.onload = function(e) {
+        try {
+            var backup = JSON.parse(e.target.result);
+            if (!backup.accounts || !backup.bills) {
+                showToast('备份文件格式不正确', 'error');
+                return;
+            }
+            if (!confirm('确认导入备份数据？' +
+                '\n账号数：' + backup.accounts.length +
+                '\n账单数：' + backup.bills.length +
+                '\n\n导入后将覆盖当前所有数据，此操作不可撤销！')) return;
+            
+            APP_DATA.accounts = backup.accounts;
+            APP_DATA.billUsers = backup.billUsers || [];
+            APP_DATA.bills = backup.bills;
+            APP_DATA.currentAccountId = null;
+            _CACHE.cred = null;
+            _SYNC_SHA = null;
+            _LAST_SYNC_HASH = '';
+            
+            saveData().then(function() {
+                return _IDB.removeItem('billApp_savedCred');
+            }).then(function() {
+                return _IDB.removeItem('billApp_lastAccount');
+            }).then(function() {
+                showToast('数据已导入，请重新登录', 'success');
+                setTimeout(function() {
+                    location.reload();
+                }, 1500);
+            }).catch(function() {
+                showToast('导入失败，请重试', 'error');
+            });
+        } catch(err) {
+            showToast('文件解析失败，请检查文件格式', 'error');
+        }
+    };
+    reader.readAsText(file);
+    input.value = '';
+}
+
 // 账号户管理
 function renderAccountGrid() {
     var grid = document.getElementById('accountGrid');
