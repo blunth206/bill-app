@@ -247,6 +247,20 @@
 
                 <hr style="margin:32px 0;border:1px solid var(--border);">
 
+                <!-- 数据备份 -->
+                <div class="section-header">
+                    <h2>💾 数据备份</h2>
+                </div>
+                <p class="section-desc">导出数据到文件保存，防止浏览器清理导致数据丢失</p>
+                <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:12px;">
+                    <button class="btn btn-primary" onclick="exportAllData()">📥 导出备份</button>
+                    <button class="btn" onclick="document.getElementById('importFileInput').click()">📤 导入备份</button>
+                    <input type="file" id="importFileInput" accept=".json" style="display:none;" onchange="importAllData(this)">
+                </div>
+                <p class="hint" style="margin-top:8px;">导出的备份文件包含所有账号、密码和账单数据，请妥善保管。</p>
+
+                <hr style="margin:32px 0;border:1px solid var(--border);">
+
                 <!-- 云同步 -->
                 <div class="section-header">
                     <h2>🔗 云同步</h2>
@@ -751,7 +765,7 @@
     <!-- Toast 提示 -->
     <div class="toast" id="toast"></div>
 
-    <script src="app.js?v=11"></script>
+    <script src="app.js?v=12"></script>
     <script>
     (function(){
         function showForgot(){
