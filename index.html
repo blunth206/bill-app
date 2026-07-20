@@ -35,7 +35,7 @@
         }
     </script>
     <script>
-        if ('serviceWorker' in navigator) { navigator.serviceWorker.register('sw.js?v=8').catch(() => {}); }
+        if ('serviceWorker' in navigator) { navigator.serviceWorker.register('sw.js?v=9').catch(() => {}); }
         (function removeSafetyBanner() {
             const observer = new MutationObserver(function() {
                 const banners = document.querySelectorAll('div[style*="fixed"]');
@@ -61,6 +61,7 @@
     </script>
 </head>
 <body>
+    <!-- 版本标识 v21 -->
     <!-- 添加到主屏幕引导条（仅浏览器内显示，PWA模式下隐藏） -->
     <div class="pwa-install-banner" id="pwaInstallBanner" style="display:none;">
         <span class="pwa-banner-text">💡 点击浏览器菜单 →「添加到主屏幕」，获得全屏沉浸体验</span>
@@ -96,6 +97,7 @@
                 </div>
             </div>
         </div>
+        <div style="text-align:center;color:var(--text-secondary);font-size:11px;margin-top:8px;opacity:0.6;">v21</div>
     </div>
 
     <!-- 忘记密码弹窗 -->
@@ -772,7 +774,7 @@
     <!-- Toast 提示 -->
     <div class="toast" id="toast"></div>
 
-    <script src="app.js?v=20"></script>
+    <script src="app.js?v=21"></script>
     <script>
     (function(){
         function showForgot(){
