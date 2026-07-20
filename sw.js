@@ -1,5 +1,5 @@
-// Service Worker - PWA 离线缓存（v9：v29固定Token显示 + 复制按钮）
-const CACHE_NAME = 'jizhang-v13';
+// Service Worker - PWA 离线缓存（v10：v30版本号位置调整）
+const CACHE_NAME = 'jizhang-v14';
 const FILES_TO_CACHE = [
   '.',
   'index.html',
