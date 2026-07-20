@@ -692,10 +692,33 @@ function doLogin(auto) {
     }
     switchView('home');
 
-    // 登录后自动全屏（利用登录点击的用户手势）
-    var el = document.documentElement;
-    if (el.requestFullscreen) { el.requestFullscreen().catch(function(){}); }
-    else if (el.webkitRequestFullscreen) { el.webkitRequestFullscreen(); }
+    // 登录后全屏
+    if (!auto) {
+        // 手动登录：利用当前点击的用户手势直接全屏
+        var el = document.documentElement;
+        if (el.requestFullscreen) { el.requestFullscreen().catch(function(){}); }
+        else if (el.webkitRequestFullscreen) { el.webkitRequestFullscreen(); }
+        _IDB.setItem('billApp_wasFullscreen', '1');
+    } else {
+        // 自动登录（刷新/重开页面）：注册一次性交互监听，首次点击/触摸时自动全屏
+        var wasFullscreen = _IDB.getItem('billApp_wasFullscreen');
+        if (wasFullscreen === '1') {
+            (function restoreFullscreen() {
+                var trigger = function(e) {
+                    document.removeEventListener('click', trigger, false);
+                    document.removeEventListener('touchstart', trigger, false);
+                    var el2 = document.documentElement;
+                    if (!document.fullscreenElement && !document.webkitFullscreenElement) {
+                        if (el2.requestFullscreen) { el2.requestFullscreen().catch(function(){}); }
+                        else if (el2.webkitRequestFullscreen) { el2.webkitRequestFullscreen(); }
+                        _IDB.setItem('billApp_wasFullscreen', '1');
+                    }
+                };
+                document.addEventListener('click', trigger, false);
+                document.addEventListener('touchstart', trigger, { passive: true, once: false });
+            })();
+        }
+    }
 
     // 登录后同步：先拉取云端数据合并，再推送合并结果
     console.log('[同步] 登录后开始同步... 本地账单' + APP_DATA.bills.length + '条');
@@ -715,11 +738,23 @@ function toggleFullscreen() {
         var el = document.documentElement;
         if (el.requestFullscreen) { el.requestFullscreen().catch(function(){});
         } else if (el.webkitRequestFullscreen) { el.webkitRequestFullscreen(); }
+        _IDB.setItem('billApp_wasFullscreen', '1');
     } else {
         if (document.exitFullscreen) { document.exitFullscreen();
         } else if (document.webkitExitFullscreen) { document.webkitExitFullscreen(); }
+        _IDB.setItem('billApp_wasFullscreen', '0');
     }
 }
+
+// 监听全屏变化（用户通过浏览器UI退出全屏时同步状态）
+document.addEventListener('fullscreenchange', function() {
+    var isFull = !!(document.fullscreenElement || document.webkitFullscreenElement);
+    _IDB.setItem('billApp_wasFullscreen', isFull ? '1' : '0');
+});
+document.addEventListener('webkitfullscreenchange', function() {
+    var isFull = !!(document.fullscreenElement || document.webkitFullscreenElement);
+    _IDB.setItem('billApp_wasFullscreen', isFull ? '1' : '0');
+});
 
 function doLogout() {
     APP_DATA.currentAccountId = null;
@@ -4189,7 +4224,7 @@ function init() {
 // 页面加载完成后初始化
 document.addEventListener('DOMContentLoaded', function() {
     // 输出版本号，方便确认是否加载到最新代码
-    console.log('[记账App] 版本 v26 | ' + new Date().toISOString());
+    console.log('[记账App] 版本 v28 | ' + new Date().toISOString());
     init();
     // 右下角「+」按钮可拖动
     initFabDrag();
@@ -4216,8 +4251,7 @@ function initFabDrag() {
         var rect = fab.getBoundingClientRect();
         startLeft = rect.left;
         startTop = rect.top;
-        fab.classList.add('dragging');
-        e.preventDefault();
+        // 不在这里 preventDefault，否则会导致 click 事件无法触发
     }
 
     function onMove(e) {
@@ -4226,7 +4260,10 @@ function initFabDrag() {
         var dx = touch.clientX - startX;
         var dy = touch.clientY - startY;
         if (Math.abs(dx) < DRAG_THRESHOLD && Math.abs(dy) < DRAG_THRESHOLD) return;
+        // 确认拖拽后才阻止默认行为（防止页面滚动），此时 click 不会触发
+        e.preventDefault();
         moved = true;
+        fab.classList.add('dragging');
         var newLeft = startLeft + dx;
         var newTop = startTop + dy;
         // 限制在视口内
@@ -4245,7 +4282,7 @@ function initFabDrag() {
         startX = startY = undefined;
     }
 
-    fab.addEventListener('touchstart', onStart, { passive: false });
+    fab.addEventListener('touchstart', onStart, { passive: true });
     fab.addEventListener('touchmove', onMove, { passive: false });
     fab.addEventListener('touchend', onEnd);
 }
