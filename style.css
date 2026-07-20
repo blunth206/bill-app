@@ -1956,10 +1956,11 @@ body {
     }
 }
 
-/* 超小屏（≤480px）：汇总卡片单列，确保不溢出 */
+/* 超小屏（≤480px）：汇总卡片两列紧凑布局 */
 @media (max-width: 480px) {
     .summary-cards {
-        grid-template-columns: 1fr !important;
+        grid-template-columns: repeat(2, 1fr) !important;
+        gap: 6px;
         max-width: 100%;
         box-sizing: border-box;
     }
@@ -1967,6 +1968,13 @@ body {
         min-width: 0;
         max-width: 100%;
         box-sizing: border-box;
+        padding: 8px 10px;
+    }
+    .summary-card .card-value {
+        font-size: 18px;
+    }
+    .summary-card .card-label {
+        font-size: 11px;
     }
     .main-content {
         padding: 0 8px;
