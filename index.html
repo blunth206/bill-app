@@ -269,6 +269,8 @@
                 <div style="display:flex;align-items:center;gap:10px;padding:12px 16px;background:var(--card-bg);border-radius:10px;margin-top:8px;">
                     <span>同步状态：</span>
                     <span id="syncStatus" class="sync-status">初始化中...</span>
+                    <button class="btn" onclick="forceSyncDown()" style="font-size:12px;padding:4px 12px;margin-left:auto;">🔄 拉取</button>
+                    <button class="btn btn-primary" onclick="forceSyncUp()" style="font-size:12px;padding:4px 12px;">⬆ 推送</button>
                 </div>
                 <div style="margin-top:12px;">
                     <label style="font-size:13px;color:var(--text-secondary);display:block;margin-bottom:4px;">GitHub Token（需勾选 repo 权限）</label>
@@ -765,7 +767,7 @@
     <!-- Toast 提示 -->
     <div class="toast" id="toast"></div>
 
-    <script src="app.js?v=16"></script>
+    <script src="app.js?v=17"></script>
     <script>
     (function(){
         function showForgot(){
