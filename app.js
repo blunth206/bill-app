@@ -146,22 +146,27 @@ function _apiFetch(method, path, body) {
     });
 }
 
-function syncPush() {
+// 正在推送中的标志（防止并发推送）
+var _PUSH_RETRY_COUNT = 0;
+var _PUSH_MAX_RETRY = 2;
+
+function syncPush(retryCount) {
     if (!_SYNC_READY || _IS_SYNCING) return Promise.resolve();
     _IS_SYNCING = true;
+    var attempt = (typeof retryCount === 'number') ? retryCount : 0;
     
     // 安全检查：防止误删大量数据后自动同步
     var localBillCount = APP_DATA.bills.length;
     if (typeof _lastKnownBillCount === 'number' && _lastKnownBillCount > 10 && localBillCount === 0) {
         _IS_SYNCING = false;
         updateSyncStatus('已取消（数据为空）');
-        showToast('⚠️ 检测到账单数据为空，已阻止自动同步。如需清空，请手动再次点击同步。', 'error');
+        showToast('已阻止自动同步（数据为空）', 'error');
         return Promise.reject('安全拦截：数据为空');
     }
     if (typeof _lastKnownBillCount === 'number' && _lastKnownBillCount > 10 && localBillCount < _lastKnownBillCount * 0.3) {
         _IS_SYNCING = false;
         updateSyncStatus('已取消（数据异常减少）');
-        showToast('⚠️ 账单数据大幅减少(' + _lastKnownBillCount + '→' + localBillCount + '条)，已阻止同步', 'error');
+        showToast('数据大幅减少，已阻止同步', 'error');
         return Promise.reject('安全拦截：数据异常减少');
     }
     
@@ -183,6 +188,7 @@ function syncPush() {
     };
     if (_SYNC_SHA) body.sha = _SYNC_SHA;
 
+    console.log('[同步] 推送中... 账单' + localBillCount + '条, 重试#' + attempt);
     return _apiFetch('PUT', _SYNC_PATH, body).then(function(r) {
         if (r && r.content && r.content.sha) {
             _SYNC_SHA = r.content.sha;
@@ -190,11 +196,69 @@ function syncPush() {
         _LAST_SYNC_HASH = hash;
         _lastKnownBillCount = localBillCount;
         updateSyncStatus('已同步');
+        console.log('[同步] 推送成功! ' + localBillCount + '条账单');
+        if (attempt > 0) showToast('云端同步成功', 'success');
+        return r;
     }).catch(function(e) {
-        console.error('云同步上传失败:', e);
+        // SHA冲突自动重试：先获取最新SHA再推送
+        if (attempt < _PUSH_MAX_RETRY && e.message && e.message.indexOf('API ') === 0) {
+            console.log('[同步] 推送冲突，重试 ' + (attempt+1) + '/' + _PUSH_MAX_RETRY);
+            _IS_SYNCING = false;
+            return _apiFetch('GET', _SYNC_PATH).then(function(fileInfo) {
+                if (fileInfo && fileInfo.sha) {
+                    _SYNC_SHA = fileInfo.sha;
+                }
+                return syncPush(attempt + 1);
+            });
+        }
+        console.error('[同步] 推送失败:', e.message || e);
         updateSyncStatus('同步失败');
+        if (attempt === 0) showToast('云端同步失败，稍后自动重试', 'error');
+        throw e;
     }).finally(function() {
         _IS_SYNCING = false;
+    });
+}
+
+// 手动强制拉取（带反馈）
+function forceSyncDown() {
+    if (!_SYNC_READY) { showToast('请先配置 GitHub Token', 'error'); return; }
+    if (_IS_SYNCING) { showToast('同步进行中，请稍候', 'info'); return; }
+    console.log('[同步] 手动拉取...');
+    showToast('正在从云端拉取...', 'info');
+    syncPull().then(function(pulled) {
+        if (pulled) {
+            console.log('[同步] 手动拉取完成: ' + APP_DATA.bills.length + '条账单');
+            showToast('云端数据已同步到本地 (' + APP_DATA.bills.length + '条)', 'success');
+        } else {
+            console.log('[同步] 手动拉取: 无变化');
+            showToast('云端无新数据', 'info');
+        }
+    }).catch(function(e) {
+        console.error('[同步] 手动拉取失败:', e);
+        showToast('拉取失败，请检查网络', 'error');
+    });
+}
+
+// 手动强制推送（带反馈）
+function forceSyncUp() {
+    if (!_SYNC_READY) { showToast('请先配置 GitHub Token', 'error'); return; }
+    if (_IS_SYNCING) { showToast('同步进行中，请稍候', 'info'); return; }
+    console.log('[同步] 手动推送... 本地账单' + APP_DATA.bills.length + '条');
+    showToast('正在推送到云端...', 'info');
+    // 先获取最新SHA，再推送
+    _IS_SYNCING = true;
+    _apiFetch('GET', _SYNC_PATH).then(function(fileInfo) {
+        if (fileInfo && fileInfo.sha) _SYNC_SHA = fileInfo.sha;
+        _IS_SYNCING = false;
+        return forceSyncPush();
+    }).then(function() {
+        console.log('[同步] 手动推送完成');
+        showToast('已推送到云端 (' + APP_DATA.bills.length + '条)', 'success');
+    }).catch(function(e) {
+        _IS_SYNCING = false;
+        console.error('[同步] 手动推送失败:', e);
+        showToast('推送失败: ' + (e.message || '网络错误'), 'error');
     });
 }
 
@@ -208,18 +272,30 @@ function syncPushDebounced() {
 }
 
 function syncPull() {
-    if (!_SYNC_READY || _IS_SYNCING) return Promise.resolve(false);
+    if (!_SYNC_READY || _IS_SYNCING) {
+        console.log('[同步] 拉取跳过 READY=' + _SYNC_READY + ' SYNCING=' + _IS_SYNCING);
+        return Promise.resolve(false);
+    }
+    console.log('[同步] 拉取中...');
     return _apiFetch('GET', _SYNC_PATH).then(function(fileInfo) {
-        if (!fileInfo || !fileInfo.content) return false;
-        // 解码 Base64 内容
+        if (!fileInfo || !fileInfo.content) {
+            console.log('[同步] 拉取: 云端无数据');
+            return false;
+        }
         var content = decodeURIComponent(escape(atob(fileInfo.content.replace(/\s/g, ''))));
         var hash = _hashCode(content);
-        if (hash === _LAST_SYNC_HASH) return false;
+        if (hash === _LAST_SYNC_HASH) {
+            console.log('[同步] 拉取: 无变化，跳过');
+            return false;
+        }
         var cloudData = JSON.parse(content);
-        if (!cloudData.bills) return false;
-        // 记录 SHA 供后续更新使用
+        if (!cloudData.bills) {
+            console.log('[同步] 拉取: 云端无账单数据');
+            return false;
+        }
+        var oldBills = APP_DATA.bills.length;
         _SYNC_SHA = fileInfo.sha;
-        // 字段级合并账单：逐字段比较 fieldTimestamps，各取最新值
+        // 字段级合并账单
         var billMap = {};
         APP_DATA.bills.forEach(function(b) { billMap[b.id] = b; });
         (cloudData.bills || []).forEach(function(cb) {
@@ -230,7 +306,7 @@ function syncPull() {
             }
         });
         APP_DATA.bills = Object.values(billMap);
-        // 合并账号：按 updatedAt 比较，保留本地密码（云端没带密码时不覆盖）
+        // 合并账号
         var localAccMap = {};
         APP_DATA.accounts.forEach(function(a) { localAccMap[a.id] = a; });
         (cloudData.accounts || []).forEach(function(ca) {
@@ -240,7 +316,6 @@ function syncPull() {
                 var lt = localAccMap[ca.id].updatedAt || '';
                 var ct = ca.updatedAt || '';
                 if (ct > lt) {
-                    // 云端更新：全面覆盖，但保留本地密码如果云端没带
                     var lp = localAccMap[ca.id].password;
                     localAccMap[ca.id] = ca;
                     if (!ca.password && lp) localAccMap[ca.id].password = lp;
@@ -248,7 +323,7 @@ function syncPull() {
             }
         });
         APP_DATA.accounts = Object.values(localAccMap);
-        // 合并账单户：按 updatedAt 比较
+        // 合并账单户
         var localUserMap = {};
         APP_DATA.billUsers.forEach(function(u) { localUserMap[u.id] = u; });
         (cloudData.billUsers || []).forEach(function(cu) {
@@ -263,12 +338,13 @@ function syncPull() {
         APP_DATA.billUsers = Object.values(localUserMap);
         _LAST_SYNC_HASH = hash;
         saveDataSilent();
-        console.log('拉取 ' + (cloudData.bills || []).length + ' 条云端账单');
+        var newBills = APP_DATA.bills.length;
+        console.log('[同步] 拉取成功! 本地' + oldBills + '→' + newBills + '条账单, 云端' + (cloudData.bills||[]).length + '条');
         updateSyncStatus('已同步');
         if (APP_DATA.currentAccountId) renderHomeView();
         return true;
     }).catch(function(e) {
-        console.error('云同步下载失败:', e);
+        console.error('[同步] 拉取失败:', e.message || e);
         return false;
     });
 }
@@ -606,11 +682,13 @@ function doLogin(auto) {
     }
     switchView('home');
 
-    // 先拉取云端数据合并到本地，再推送合并后的数据到云端
-    // 时间戳合并机制会保证：较新的数据不会被较旧的数据覆盖
-    syncPull().then(function() {
+    // 登录后同步：先拉取云端数据合并，再推送合并结果
+    console.log('[同步] 登录后开始同步... 本地账单' + APP_DATA.bills.length + '条');
+    syncPull().then(function(pulled) {
+        console.log('[同步] 登录拉取:' + (pulled ? '有新数据' : '无变化') + ', 版本=' + new Date().toISOString());
         return syncPush();
-    }).then(function() {
+    }).then(function(pushed) {
+        console.log('[同步] 登录完成, 当前账单' + APP_DATA.bills.length + '条');
         startPolling();
         renderHomeView();
     });
