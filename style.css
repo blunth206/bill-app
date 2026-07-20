@@ -1898,7 +1898,13 @@ body {
     .header-actions { gap: 4px; }
     .header-actions .btn { padding: 6px 10px; font-size: 11px; }
     .btn-add-bill-header, .btn-import-bill-header { padding: 6px 10px; font-size: 11px; }
-    .summary-cards { grid-template-columns: repeat(2, 1fr); }
+    .summary-cards { 
+        grid-template-columns: repeat(2, 1fr);
+        max-width: 100%;
+        overflow-x: hidden;
+    }
+    .summary-card { min-width: 0; padding: 10px 12px; }
+    .summary-card .card-value { font-size: 20px; }
     .filter-bar { gap: 4px; padding: 6px 8px; font-size: 12px; margin-bottom: 4px; }
     .filter-row-top { gap: 6px; }
     .filter-account-label { font-size: 12px; }
@@ -1947,6 +1953,26 @@ body {
     /* 弹窗限制宽度 */
     .modal-content {
         max-width: calc(100vw - 20px);
+    }
+}
+
+/* 超小屏（≤480px）：汇总卡片单列，确保不溢出 */
+@media (max-width: 480px) {
+    .summary-cards {
+        grid-template-columns: 1fr !important;
+        max-width: 100%;
+        box-sizing: border-box;
+    }
+    .summary-card {
+        min-width: 0;
+        max-width: 100%;
+        box-sizing: border-box;
+    }
+    .main-content {
+        padding: 0 8px;
+    }
+    .header {
+        padding: 8px;
     }
 }
 
