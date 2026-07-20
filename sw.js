@@ -1,5 +1,5 @@
-// Service Worker - PWA 离线缓存（v4：GitHub API 请求不缓存，避免 SHA/数据过期）
-const CACHE_NAME = 'jizhang-v8';
+// Service Worker - PWA 离线缓存（v5：强制清理所有旧缓存）
+const CACHE_NAME = 'jizhang-v9';
 const FILES_TO_CACHE = [
   '.',
   'index.html',
@@ -13,17 +13,16 @@ self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
       return cache.addAll(FILES_TO_CACHE).catch(() => {});
-    })
+    }).then(() => self.skipWaiting())
   );
-  self.skipWaiting();
 });
 
-// 激活时清理旧版本缓存
+// 激活时清理所有旧版本缓存
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then((keys) => {
       return Promise.all(
-        keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key))
+        keys.map((key) => caches.delete(key))
       );
     })
   );
