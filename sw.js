@@ -1,5 +1,5 @@
-// Service Worker - PWA 离线缓存（v3：核心文件改为网络优先，避免旧代码长期缓存）
-const CACHE_NAME = 'jizhang-v7';
+// Service Worker - PWA 离线缓存（v4：GitHub API 请求不缓存，避免 SHA/数据过期）
+const CACHE_NAME = 'jizhang-v8';
 const FILES_TO_CACHE = [
   '.',
   'index.html',
@@ -34,6 +34,11 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   // CDN 资源直接走网络，不做拦截
   if (event.request.url.includes('cdn.') || event.request.url.includes('jsdelivr.net')) {
+    return;
+  }
+
+  // GitHub API 请求必须走网络，避免缓存旧 SHA 导致 409 冲突
+  if (event.request.url.includes('api.github.com')) {
     return;
   }
 
