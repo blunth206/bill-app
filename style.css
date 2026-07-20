@@ -1858,70 +1858,44 @@ body {
 
 /* 响应式 */
 @media (max-width: 768px) {
-    .header { padding: 10px 12px; flex-wrap: wrap; gap: 6px; }
+    /* 头部 */
+    .header { padding: 10px 12px; flex-wrap: wrap; gap: 6px; overflow-x: hidden; max-width: 100vw; }
     .header h1 { font-size: 16px; }
     .header-actions { gap: 4px; }
     .header-actions .btn { padding: 6px 10px; font-size: 11px; }
     .btn-add-bill-header, .btn-import-bill-header { padding: 6px 10px; font-size: 11px; }
+    /* 汇总卡片：两列，严禁溢出 */
     .summary-cards { 
         grid-template-columns: repeat(2, 1fr);
+        gap: 8px;
         max-width: 100%;
         overflow-x: hidden;
+        box-sizing: border-box;
     }
-    .summary-card { min-width: 0; padding: 10px 12px; }
-    .summary-card .card-value { font-size: 20px; }
-    .filter-bar { gap: 4px; padding: 6px 8px; font-size: 12px; margin-bottom: 4px; }
-    .filter-row-top { gap: 6px; }
+    .summary-card { min-width: 0; max-width: 100%; padding: 8px 10px; box-sizing: border-box; }
+    .summary-card .card-value { font-size: 16px; word-break: break-all; }
+    .summary-card .card-label { font-size: 11px; white-space: nowrap; }
+    .summary-card .card-icon { font-size: 18px; }
+    /* 主内容区 */
+    .main-content { max-width: 100vw; overflow-x: hidden; padding: 0 6px; }
+    /* 筛选栏 */
+    .filter-bar { gap: 4px; padding: 6px 8px; font-size: 12px; margin-bottom: 4px; overflow-x: auto; max-width: 100vw; white-space: nowrap; }
+    .filter-row-top { gap: 6px; flex-wrap: wrap; overflow-x: hidden; }
     .filter-account-label { font-size: 12px; }
     .filter-user-select { font-size: 14px; padding: 5px 8px; min-width: 100px; border-width: 2px; }
     .time-mode-btn { padding: 4px 10px; font-size: 12px; }
     .time-mode-group select { min-width: 60px; }
     .filter-bar select, .filter-bar input[type="date"] { font-size: 12px; padding: 4px 8px; }
+    /* 表格 */
     .bill-table { font-size: 12px; }
     .bill-table th, .bill-table td { padding: 8px 10px; }
+    .data-table-wrapper { max-width: 100vw; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    .bill-table-container { max-width: 100vw; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    /* 弹窗 */
+    .modal-content { max-width: calc(100vw - 20px); }
 }
 
-/* 手机端溢出修复：所有容器限制在视口宽度内 */
-@media (max-width: 768px) {
-    .header {
-        flex-wrap: wrap;
-        overflow-x: hidden;
-        max-width: 100vw;
-    }
-    .main-content {
-        max-width: 100vw;
-        overflow-x: hidden;
-    }
-    .summary-cards {
-        max-width: 100%;
-        overflow-x: hidden;
-    }
-    .filter-bar {
-        overflow-x: auto;
-        max-width: 100vw;
-        white-space: nowrap;
-    }
-    .filter-row-top {
-        flex-wrap: wrap;
-        overflow-x: hidden;
-    }
-    .data-table-wrapper {
-        max-width: 100vw;
-        overflow-x: auto;
-        -webkit-overflow-scrolling: touch;
-    }
-    .bill-table-container {
-        max-width: 100vw;
-        overflow-x: auto;
-        -webkit-overflow-scrolling: touch;
-    }
-    /* 弹窗限制宽度 */
-    .modal-content {
-        max-width: calc(100vw - 20px);
-    }
-}
-
-/* 超小屏（≤480px）：汇总卡片两列紧凑布局 */
+/* 超小屏（≤480px）：汇总卡片进一步紧凑 */
 @media (max-width: 480px) {
     .summary-cards {
         grid-template-columns: repeat(2, 1fr) !important;
@@ -1933,20 +1907,13 @@ body {
         min-width: 0;
         max-width: 100%;
         box-sizing: border-box;
-        padding: 8px 10px;
+        padding: 6px 8px;
     }
-    .summary-card .card-value {
-        font-size: 18px;
-    }
-    .summary-card .card-label {
-        font-size: 11px;
-    }
-    .main-content {
-        padding: 0 8px;
-    }
-    .header {
-        padding: 8px;
-    }
+    .summary-card .card-value { font-size: 14px; }
+    .summary-card .card-label { font-size: 10px; }
+    .summary-card .card-icon { font-size: 16px; margin-bottom: 2px; }
+    .main-content { padding: 0 4px; }
+    .header { padding: 6px 8px; }
 }
 
 /* 手机端浮动添加按钮 */
