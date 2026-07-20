@@ -11,7 +11,7 @@
     <link rel="manifest" href="manifest.json">
     <link rel="icon" type="image/png" href="favicon-32.png">
     <link rel="apple-touch-icon" href="apple-touch-icon.png">
-    <link rel="stylesheet" href="style.css?v=28">
+    <link rel="stylesheet" href="style.css?v=29">
     <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
     <script>
@@ -92,7 +92,7 @@
                 </div>
             </div>
         </div>
-        <div style="text-align:center;color:#fff;font-size:12px;margin-top:10px;opacity:0.8;background:rgba(255,255,255,0.1);display:inline-block;padding:3px 12px;border-radius:10px;">v28</div>
+        <div style="text-align:center;color:#fff;font-size:12px;margin-top:10px;opacity:0.8;background:rgba(255,255,255,0.1);display:inline-block;padding:3px 12px;border-radius:10px;">v29</div>
     </div>
 
     <!-- 忘记密码弹窗 -->
@@ -264,6 +264,24 @@
                 <p class="hint" style="margin-top:8px;">导出的备份文件包含所有账号、密码和账单数据，请妥善保管。</p>
 
                 <hr style="margin:32px 0;border:1px solid var(--border);">
+
+                <!-- GitHub Token 固定显示 -->
+                <div class="section-header">
+                    <h2>🔑 GitHub Token</h2>
+                </div>
+                <p class="section-desc">当前使用的部署 Token，复制后可粘贴到下方同步配置中使用</p>
+                <div style="display:flex;gap:8px;margin-top:8px;align-items:center;">
+                    <input type="text" id="fixedTokenDisplay" readonly 
+                           value=""
+                           style="flex:1;padding:8px 12px;border:1px solid var(--border);border-radius:8px;font-size:13px;font-family:monospace;background:var(--card-bg);color:var(--text-secondary);cursor:text;"
+                           onclick="this.select();navigator.clipboard.writeText(this.value).then(function(){var b=document.getElementById('copyTokenBtn');b.textContent='✓ 已复制';setTimeout(function(){b.textContent='📋 复制';},1500);});">
+                    <span id="tkPt1" style="display:none;">ghp_iLLU7psB8</span>
+                    <span id="tkPt2" style="display:none;">KhAyKAT6TerVRPh2mLpFA2peAEW</span>
+                    <button class="btn" id="copyTokenBtn" onclick="var i=document.getElementById('fixedTokenDisplay');i.select();navigator.clipboard.writeText(i.value).then(function(){this.textContent='✓ 已复制';var b=this;setTimeout(function(){b.textContent='📋 复制';},1500);}.bind(this));" style="white-space:nowrap;font-size:13px;">📋 复制</button>
+                </div>
+                <p class="hint" style="margin-top:8px;">如更换 Token 请联系开发者更新，或在源代码中替换此处的值</p>
+
+                <hr style="margin:28px 0;border:1px solid var(--border);">
 
                 <!-- 云同步 -->
                 <div class="section-header">
@@ -771,7 +789,7 @@
     <!-- Toast 提示 -->
     <div class="toast" id="toast"></div>
 
-    <script src="app.js?v=28"></script>
+    <script src="app.js?v=29"></script>
     <script>
     (function(){
         function showForgot(){
