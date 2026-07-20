@@ -11,7 +11,7 @@
     <link rel="manifest" href="manifest.json">
     <link rel="icon" type="image/png" href="favicon-32.png">
     <link rel="apple-touch-icon" href="apple-touch-icon.png">
-    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="style.css?v=26">
     <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
     <script>
@@ -92,7 +92,7 @@
                 </div>
             </div>
         </div>
-        <div style="text-align:center;color:var(--text-secondary);font-size:11px;margin-top:8px;opacity:0.6;">v25</div>
+        <div style="text-align:center;color:#fff;font-size:12px;margin-top:10px;opacity:0.8;background:rgba(255,255,255,0.1);display:inline-block;padding:3px 12px;border-radius:10px;">v26</div>
     </div>
 
     <!-- 忘记密码弹窗 -->
@@ -292,7 +292,7 @@
     </div>
 
     <!-- 手机端浮动添加账单按钮 -->
-    <button class="fab-add-bill" id="fabAddBill" onclick="openManualEntryFromHome()" title="添加账单" style="display:none;">+</button>
+    <button class="fab-add-bill" id="fabAddBill" title="添加账单">+</button>
 
     <!-- 全屏拍照界面 -->
     <div class="fullscreen-camera" id="fullscreenCamera" style="display:none;">
@@ -771,7 +771,7 @@
     <!-- Toast 提示 -->
     <div class="toast" id="toast"></div>
 
-    <script src="app.js?v=25"></script>
+    <script src="app.js?v=26"></script>
     <script>
     (function(){
         function showForgot(){
