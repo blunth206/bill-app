@@ -692,6 +692,11 @@ function doLogin(auto) {
     }
     switchView('home');
 
+    // 登录后自动全屏（利用登录点击的用户手势）
+    var el = document.documentElement;
+    if (el.requestFullscreen) { el.requestFullscreen().catch(function(){}); }
+    else if (el.webkitRequestFullscreen) { el.webkitRequestFullscreen(); }
+
     // 登录后同步：先拉取云端数据合并，再推送合并结果
     console.log('[同步] 登录后开始同步... 本地账单' + APP_DATA.bills.length + '条');
     syncPull().then(function(pulled) {
