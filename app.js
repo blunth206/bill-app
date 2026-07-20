@@ -4224,7 +4224,7 @@ function init() {
 // 页面加载完成后初始化
 document.addEventListener('DOMContentLoaded', function() {
     // 输出版本号，方便确认是否加载到最新代码
-    console.log('[记账App] 版本 v28 | ' + new Date().toISOString());
+    console.log('[记账App] 版本 v29 | ' + new Date().toISOString());
     init();
     // 右下角「+」按钮可拖动
     initFabDrag();
