@@ -4189,9 +4189,66 @@ function init() {
 // 页面加载完成后初始化
 document.addEventListener('DOMContentLoaded', function() {
     // 输出版本号，方便确认是否加载到最新代码
-    console.log('[记账App] 版本 v24 | ' + new Date().toISOString());
+    console.log('[记账App] 版本 v26 | ' + new Date().toISOString());
     init();
+    // 右下角「+」按钮可拖动
+    initFabDrag();
 });
+
+// 右下角浮动按钮拖拽
+function initFabDrag() {
+    var fab = document.getElementById('fabAddBill');
+    if (!fab) return;
+    var startX, startY, startLeft, startTop;
+    var moved = false;
+    var DRAG_THRESHOLD = 6; // 移动超过6px才算拖拽
+
+    // 接管点击事件：拖拽时不触发
+    fab.onclick = function(e) {
+        if (!moved) openManualEntryFromHome();
+    };
+
+    function onStart(e) {
+        moved = false;
+        var touch = e.touches ? e.touches[0] : e;
+        startX = touch.clientX;
+        startY = touch.clientY;
+        var rect = fab.getBoundingClientRect();
+        startLeft = rect.left;
+        startTop = rect.top;
+        fab.classList.add('dragging');
+        e.preventDefault();
+    }
+
+    function onMove(e) {
+        if (startX === undefined) return;
+        var touch = e.touches ? e.touches[0] : e;
+        var dx = touch.clientX - startX;
+        var dy = touch.clientY - startY;
+        if (Math.abs(dx) < DRAG_THRESHOLD && Math.abs(dy) < DRAG_THRESHOLD) return;
+        moved = true;
+        var newLeft = startLeft + dx;
+        var newTop = startTop + dy;
+        // 限制在视口内
+        var maxLeft = window.innerWidth - fab.offsetWidth - 8;
+        var maxTop = window.innerHeight - fab.offsetHeight - 8;
+        newLeft = Math.max(8, Math.min(newLeft, maxLeft));
+        newTop = Math.max(8, Math.min(newTop, maxTop));
+        fab.style.left = newLeft + 'px';
+        fab.style.top = newTop + 'px';
+        fab.style.right = 'auto';
+        fab.style.bottom = 'auto';
+    }
+
+    function onEnd(e) {
+        fab.classList.remove('dragging');
+        startX = startY = undefined;
+    }
+
+    fab.addEventListener('touchstart', onStart, { passive: false });
+    fab.addEventListener('touchmove', onMove, { passive: false });
+    fab.addEventListener('touchend', onEnd);
+}
 
 // 点击弹窗遮罩关闭
 document.addEventListener('click', function(e) {
