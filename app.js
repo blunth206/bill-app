@@ -2072,32 +2072,23 @@ function saveAccountPassword() {
     showToast('密码已修改', 'success');
 }
 
-// 去重：同名账号只保留最新的，清理同步产生的重复
+// 去重：同名账号只保留第一个，清理同步产生的重复
 function dedupAccounts() {
+    var before = APP_DATA.accounts.length;
     var seen = {};
     var unique = [];
     APP_DATA.accounts.forEach(function(acc) {
-        var existing = seen[acc.name];
-        if (existing) {
-            // 同名账号：比较createdAt或保留ID更稳定的
-            var keepExisting = (existing.id === 'admin_default') || 
-                (acc.id !== 'admin_default' && (existing.createdAt || '') >= (acc.createdAt || ''));
-            if (!keepExisting) {
-                // 替换为新账号
-                seen[acc.name] = acc;
-                unique = unique.filter(function(a) { return a.name !== acc.name; });
-                unique.push(acc);
-            }
-        } else {
-            seen[acc.name] = acc;
+        if (!seen[acc.name]) {
+            seen[acc.name] = true;
             unique.push(acc);
         }
     });
-    if (unique.length !== APP_DATA.accounts.length) {
+    if (unique.length < before) {
         APP_DATA.accounts = unique;
         saveData();
-        console.log('[数据] 账号去重: ' + unique.length + '个 (原' + (unique.length > 0 ? '有多余' : '') + ')');
+        console.log('[数据] ✅ 账号去重: ' + before + '→' + unique.length + ' (清理了' + (before - unique.length) + '个重复)');
     }
+    return unique.length;
 }
 
 function deleteAccount(accountId) {
@@ -4180,16 +4171,13 @@ function init() {
 
 // 页面加载完成后初始化
 document.addEventListener('DOMContentLoaded', function() {
+    // 输出版本号，方便确认是否加载到最新代码
+    console.log('[记账App] 版本 v21 | ' + new Date().toISOString());
     init();
-    // 手机端浏览器内提示添加到主屏幕（PWA已安装则不显示）
-    if (window.matchMedia('(display-mode: standalone)').matches) {
-        // PWA模式，隐藏引导条
-    } else if (/Mobi|Android|iPhone|iPad/i.test(navigator.userAgent)) {
-        var banner = document.getElementById('pwaInstallBanner');
-        if (banner) {
-            // 延迟显示，避免干扰首次加载
-            setTimeout(function() { banner.style.display = 'flex'; }, 2000);
-        }
+    // 手机端浏览器内展示PWA引导条（独立模式自动隐藏）
+    var banner = document.getElementById('pwaInstallBanner');
+    if (banner && !window.matchMedia('(display-mode: standalone)').matches) {
+        setTimeout(function() { banner.style.display = 'flex'; }, 2000);
     }
 });
 
