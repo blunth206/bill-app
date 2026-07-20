@@ -329,6 +329,8 @@ function syncPull() {
             }
         });
         APP_DATA.accounts = Object.values(localAccMap);
+        // 去重：同名账号保留最新的（ID稳定后清理历史脏数据）
+        dedupAccounts();
         // 合并账单户
         var localUserMap = {};
         APP_DATA.billUsers.forEach(function(u) { localUserMap[u.id] = u; });
@@ -549,10 +551,12 @@ function loadData() {
     }).catch(function(e) {
         console.error('数据加载失败', e);
     }).then(function() {
-        // 确保至少有默认管理员账号
+        // 先清理历史遗留的重复账号
+        dedupAccounts();
+        // 确保至少有默认管理员账号（使用固定ID避免同步时重复）
         if (APP_DATA.accounts.length === 0) {
             APP_DATA.accounts.push({
-                id: 'admin_' + Date.now(),
+                id: 'admin_default',
                 name: '管理员',
                 password: '123456',
                 role: 'admin',
@@ -763,7 +767,7 @@ function switchView(view) {
 var _currentTimeMode = 'month';
 // 分页状态
 var _currentPage = 1;
-var _pageSize = 20;
+var _pageSize = 100;
 var _totalFiltered = 0;
 
 // 筛选条件变更时重置页码
@@ -1971,6 +1975,7 @@ function forceSyncPush() {
 
 // 账号户管理
 function renderAccountGrid() {
+    dedupAccounts();  // 打开管理页时即时去重
     var grid = document.getElementById('accountGrid');
     var empty = document.getElementById('accountEmpty');
     if (APP_DATA.accounts.length === 0) {
@@ -2065,6 +2070,34 @@ function saveAccountPassword() {
     saveData();
     closeEditAccountPasswordModal();
     showToast('密码已修改', 'success');
+}
+
+// 去重：同名账号只保留最新的，清理同步产生的重复
+function dedupAccounts() {
+    var seen = {};
+    var unique = [];
+    APP_DATA.accounts.forEach(function(acc) {
+        var existing = seen[acc.name];
+        if (existing) {
+            // 同名账号：比较createdAt或保留ID更稳定的
+            var keepExisting = (existing.id === 'admin_default') || 
+                (acc.id !== 'admin_default' && (existing.createdAt || '') >= (acc.createdAt || ''));
+            if (!keepExisting) {
+                // 替换为新账号
+                seen[acc.name] = acc;
+                unique = unique.filter(function(a) { return a.name !== acc.name; });
+                unique.push(acc);
+            }
+        } else {
+            seen[acc.name] = acc;
+            unique.push(acc);
+        }
+    });
+    if (unique.length !== APP_DATA.accounts.length) {
+        APP_DATA.accounts = unique;
+        saveData();
+        console.log('[数据] 账号去重: ' + unique.length + '个 (原' + (unique.length > 0 ? '有多余' : '') + ')');
+    }
 }
 
 function deleteAccount(accountId) {
