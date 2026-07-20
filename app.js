@@ -149,9 +149,25 @@ function _apiFetch(method, path, body) {
 function syncPush() {
     if (!_SYNC_READY || _IS_SYNCING) return Promise.resolve();
     _IS_SYNCING = true;
+    
+    // 安全检查：防止误删大量数据后自动同步
+    var localBillCount = APP_DATA.bills.length;
+    if (typeof _lastKnownBillCount === 'number' && _lastKnownBillCount > 10 && localBillCount === 0) {
+        _IS_SYNCING = false;
+        updateSyncStatus('已取消（数据为空）');
+        showToast('⚠️ 检测到账单数据为空，已阻止自动同步。如需清空，请手动再次点击同步。', 'error');
+        return Promise.reject('安全拦截：数据为空');
+    }
+    if (typeof _lastKnownBillCount === 'number' && _lastKnownBillCount > 10 && localBillCount < _lastKnownBillCount * 0.3) {
+        _IS_SYNCING = false;
+        updateSyncStatus('已取消（数据异常减少）');
+        showToast('⚠️ 账单数据大幅减少(' + _lastKnownBillCount + '→' + localBillCount + '条)，已阻止同步', 'error');
+        return Promise.reject('安全拦截：数据异常减少');
+    }
+    
     var syncData = {
         accounts: APP_DATA.accounts.map(function(a) {
-            return { id: a.id, name: a.name, role: a.role, password: a.password, createdAt: a.createdAt };
+            return { id: a.id, name: a.name, role: a.role, password: a.password, createdAt: a.createdAt, updatedAt: a.updatedAt };
         }),
         billUsers: APP_DATA.billUsers,
         bills: APP_DATA.bills,
@@ -172,6 +188,7 @@ function syncPush() {
             _SYNC_SHA = r.content.sha;
         }
         _LAST_SYNC_HASH = hash;
+        _lastKnownBillCount = localBillCount;
         updateSyncStatus('已同步');
     }).catch(function(e) {
         console.error('云同步上传失败:', e);
@@ -202,27 +219,51 @@ function syncPull() {
         if (!cloudData.bills) return false;
         // 记录 SHA 供后续更新使用
         _SYNC_SHA = fileInfo.sha;
-        // 合并：云端有的覆盖本地，本地独有的保留
+        // 合并账单：按 updatedAt 比较，只保留更新的版本
         var billMap = {};
         APP_DATA.bills.forEach(function(b) { billMap[b.id] = b; });
-        (cloudData.bills || []).forEach(function(b) { billMap[b.id] = b; });
+        (cloudData.bills || []).forEach(function(cb) {
+            if (!billMap[cb.id]) {
+                billMap[cb.id] = cb;
+            } else {
+                var lt = billMap[cb.id].updatedAt || '';
+                var ct = cb.updatedAt || '';
+                // 云端更新才覆盖本地
+                if (ct > lt) billMap[cb.id] = cb;
+            }
+        });
         APP_DATA.bills = Object.values(billMap);
-        // 合并账号：保留本地密码，云端密码不为空时才覆盖
+        // 合并账号：按 updatedAt 比较，保留本地密码（云端没带密码时不覆盖）
         var localAccMap = {};
         APP_DATA.accounts.forEach(function(a) { localAccMap[a.id] = a; });
         (cloudData.accounts || []).forEach(function(ca) {
             if (!localAccMap[ca.id]) {
                 localAccMap[ca.id] = ca;
             } else {
-                // 云端有数据时合并，但保留本地密码（如果云端没带密码）
-                localAccMap[ca.id].name = ca.name;
-                localAccMap[ca.id].role = ca.role;
-                if (ca.password) localAccMap[ca.id].password = ca.password;
-                localAccMap[ca.id].createdAt = ca.createdAt || localAccMap[ca.id].createdAt;
+                var lt = localAccMap[ca.id].updatedAt || '';
+                var ct = ca.updatedAt || '';
+                if (ct > lt) {
+                    // 云端更新：全面覆盖，但保留本地密码如果云端没带
+                    var lp = localAccMap[ca.id].password;
+                    localAccMap[ca.id] = ca;
+                    if (!ca.password && lp) localAccMap[ca.id].password = lp;
+                }
             }
         });
         APP_DATA.accounts = Object.values(localAccMap);
-        APP_DATA.billUsers = cloudData.billUsers || APP_DATA.billUsers;
+        // 合并账单户：按 updatedAt 比较
+        var localUserMap = {};
+        APP_DATA.billUsers.forEach(function(u) { localUserMap[u.id] = u; });
+        (cloudData.billUsers || []).forEach(function(cu) {
+            if (!localUserMap[cu.id]) {
+                localUserMap[cu.id] = cu;
+            } else {
+                var lt = localUserMap[cu.id].updatedAt || '';
+                var ct = cu.updatedAt || '';
+                if (ct > lt) localUserMap[cu.id] = cu;
+            }
+        });
+        APP_DATA.billUsers = Object.values(localUserMap);
         _LAST_SYNC_HASH = hash;
         saveDataSilent();
         console.log('拉取 ' + (cloudData.bills || []).length + ' 条云端账单');
@@ -348,6 +389,12 @@ const APP_DATA = {
 };
 
 function saveData() {
+    var now = new Date().toISOString();
+    // 给所有记录自动加上更新时间戳（缺失时补充）
+    APP_DATA.accounts.forEach(function(a) { if (!a.updatedAt) a.updatedAt = now; });
+    APP_DATA.billUsers.forEach(function(u) { if (!u.updatedAt) u.updatedAt = now; });
+    APP_DATA.bills.forEach(function(b) { if (!b.updatedAt) b.updatedAt = now; });
+    
     _IDB.setItem('billApp_data', {
         accounts: APP_DATA.accounts,
         billUsers: APP_DATA.billUsers,
@@ -1119,6 +1166,7 @@ function saveEditBill() {
     b.amount = amount;
     b.note = document.getElementById('editBillNote').value;
     b.source = document.getElementById('editBillSource').value;
+    b.updatedAt = new Date().toISOString();
     saveData();
     closeEditBillModal();
     renderHomeView();
@@ -1582,6 +1630,7 @@ function saveBatchEdit() {
     APP_DATA.bills.forEach(function(b) {
         if (selectedBillIds.indexOf(b.id) !== -1) {
             Object.keys(updates).forEach(function(key) { b[key] = updates[key]; });
+            b.updatedAt = new Date().toISOString();
         }
     });
 
@@ -1635,7 +1684,8 @@ function addManualEntry() {
         amount: amount,
         note: note,
         source: '手动录入',
-        createdAt: Date.now()
+        createdAt: Date.now(),
+        updatedAt: new Date().toISOString()
     });
     saveData();
     closeManualEntry();
@@ -2743,7 +2793,8 @@ function confirmImport() {
             amount: b.amount || 0,
             note: b.note || '',
             source: '导入',
-            createdAt: Date.now()
+            createdAt: Date.now(),
+            updatedAt: new Date().toISOString()
         });
         count++;
     });
