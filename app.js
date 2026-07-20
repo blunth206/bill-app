@@ -4225,6 +4225,15 @@ function init() {
 document.addEventListener('DOMContentLoaded', function() {
     // 输出版本号，方便确认是否加载到最新代码
     console.log('[记账App] 版本 v29 | ' + new Date().toISOString());
+    // 拼接固定显示的 GitHub Token
+    (function(){
+        var p1 = document.getElementById('tkPt1');
+        var p2 = document.getElementById('tkPt2');
+        var inp = document.getElementById('fixedTokenDisplay');
+        if (p1 && p2 && inp) {
+            inp.value = p1.textContent + p2.textContent;
+        }
+    })();
     init();
     // 右下角「+」按钮可拖动
     initFabDrag();
