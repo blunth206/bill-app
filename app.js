@@ -508,12 +508,10 @@ function doLogin(auto) {
     }
     switchView('home');
 
-    // 从云端拉取最新数据
-    syncPull().then(function(hasCloudData) {
-        if (!hasCloudData) {
-            // 云端无数据，把本地数据推上去
-            syncPush();
-        }
+    // 先推送本地数据到云端，再拉取（确保本地数据不被旧云端数据覆盖）
+    syncPush().then(function() {
+        return syncPull();
+    }).then(function() {
         startPolling();
         renderHomeView();
     });
@@ -1696,17 +1694,26 @@ function importAllData(input) {
             _SYNC_SHA = null;
             _LAST_SYNC_HASH = '';
             
-            saveData().then(function() {
+            // 先存到本地
+            _IDB.setItem('billApp_data', {
+                accounts: APP_DATA.accounts,
+                billUsers: APP_DATA.billUsers,
+                bills: APP_DATA.bills
+            }).then(function() {
                 return _IDB.removeItem('billApp_savedCred');
             }).then(function() {
                 return _IDB.removeItem('billApp_lastAccount');
             }).then(function() {
-                showToast('数据已导入，请重新登录', 'success');
-                setTimeout(function() {
-                    location.reload();
-                }, 1500);
-            }).catch(function() {
-                showToast('导入失败，请重试', 'error');
+                // 强制同步到云端，等完成后才刷新
+                showToast('正在同步到云端...', 'info');
+                return forceSyncPush();
+            }).then(function() {
+                showToast('数据已导入并同步到云端，即将刷新', 'success');
+                setTimeout(function() { location.reload(); }, 2000);
+            }).catch(function(err) {
+                console.error('导入同步失败:', err);
+                showToast('本地已保存，但云端同步失败，刷新后重试', 'error');
+                setTimeout(function() { location.reload(); }, 3000);
             });
         } catch(err) {
             showToast('文件解析失败，请检查文件格式', 'error');
@@ -1714,6 +1721,47 @@ function importAllData(input) {
     };
     reader.readAsText(file);
     input.value = '';
+}
+
+// 强制同步推送（先获取云端SHA再推送，用于导入后立即同步）
+function forceSyncPush() {
+    if (!_SYNC_READY) return Promise.reject('同步未配置');
+    // 先获取当前云端文件SHA
+    return _apiFetch('GET', _SYNC_PATH).then(function(fileInfo) {
+        if (fileInfo && fileInfo.sha) {
+            _SYNC_SHA = fileInfo.sha;
+        }
+        // 构建同步数据
+        var syncData = {
+            accounts: APP_DATA.accounts.map(function(a) {
+                return { id: a.id, name: a.name, role: a.role, password: a.password, createdAt: a.createdAt };
+            }),
+            billUsers: APP_DATA.billUsers,
+            bills: APP_DATA.bills,
+            updatedAt: new Date().toISOString()
+        };
+        var content = JSON.stringify(syncData);
+        var body = {
+            message: 'import: ' + new Date().toLocaleString(),
+            content: btoa(unescape(encodeURIComponent(content)))
+        };
+        if (_SYNC_SHA) body.sha = _SYNC_SHA;
+        return _apiFetch('PUT', _SYNC_PATH, body);
+    }).then(function(r) {
+        if (r && r.content && r.content.sha) {
+            _SYNC_SHA = r.content.sha;
+        }
+        _LAST_SYNC_HASH = _hashCode(JSON.stringify({
+            accounts: APP_DATA.accounts.map(function(a) {
+                return { id: a.id, name: a.name, role: a.role, password: a.password, createdAt: a.createdAt };
+            }),
+            billUsers: APP_DATA.billUsers,
+            bills: APP_DATA.bills,
+            updatedAt: new Date().toISOString()
+        }));
+        updateSyncStatus('已同步');
+        return true;
+    });
 }
 
 // 账号户管理
