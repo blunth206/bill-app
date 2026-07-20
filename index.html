@@ -11,7 +11,7 @@
     <link rel="manifest" href="manifest.json">
     <link rel="icon" type="image/png" href="favicon-32.png">
     <link rel="apple-touch-icon" href="apple-touch-icon.png">
-    <link rel="stylesheet" href="style.css?v=30">
+    <link rel="stylesheet" href="style.css?v=31">
     <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
     <script>
@@ -93,7 +93,7 @@
                     </div>
                 </div>
             </div>
-            <div style="color:#fff;font-size:12px;margin-top:10px;opacity:0.8;background:rgba(255,255,255,0.1);padding:3px 12px;border-radius:10px;">v30</div>
+            <div style="color:#fff;font-size:12px;margin-top:10px;opacity:0.8;background:rgba(255,255,255,0.1);padding:3px 12px;border-radius:10px;">v31</div>
         </div>
     </div>
 
@@ -174,9 +174,6 @@
 
                 <!-- 批量操作栏 -->
                 <div class="batch-action-bar" id="batchActionBar">
-                    <button class="btn btn-confirm-action" id="batchConfirmBtn" onclick="confirmBatchAction()" style="display:none;">✅ 确认操作</button>
-                    <button class="btn btn-cancel-action" id="batchCancelBtn" onclick="cancelBatchAction()" style="display:none;">↩️ 取消</button>
-                    <span id="batchCount" style="display:none;font-size:14px;color:var(--danger);font-weight:600;margin-left:8px;"></span>
                     <span class="batch-spacer"></span>
                     <button class="btn btn-batch-edit" id="batchEditBtn" onclick="toggleBatchEdit()">✏️ 批量修改</button>
                     <button class="btn btn-batch-delete" id="batchDeleteBtn" onclick="toggleBatchDelete()">🗑 批量删除</button>
@@ -196,6 +193,9 @@
                             <button onclick="exportAsImage()">🖼 导出为图片</button>
                         </div>
                     </div>
+                    <button class="btn btn-confirm-action" id="batchConfirmBtn" onclick="confirmBatchAction()" style="display:none;">✅ 去修改</button>
+                    <button class="btn btn-cancel-action" id="batchCancelBtn" onclick="cancelBatchAction()" style="display:none;">↩️ 取消</button>
+                    <span id="batchCount" style="display:none;font-size:14px;color:var(--danger);font-weight:600;margin-left:8px;"></span>
                 </div>
                 <div class="bill-table-container">
                     <table class="bill-table" id="homeBillTable">
@@ -791,7 +791,7 @@
     <!-- Toast 提示 -->
     <div class="toast" id="toast"></div>
 
-    <script src="app.js?v=30"></script>
+    <script src="app.js?v=31"></script>
     <script>
     (function(){
         function showForgot(){
