@@ -911,17 +911,17 @@ function renderHomeView() {
     document.getElementById('summaryCards').innerHTML =
         '<div class="summary-card">' +
             '<div class="card-icon">📊</div>' +
-            '<div class="card-label">总结余</div>' +
+            '<div class="card-label">总结余（全年）</div>' +
             '<div class="card-value balance">¥' + formatMoney(yearTotalBalance) + '</div>' +
         '</div>' +
         '<div class="summary-card">' +
             '<div class="card-icon">📈</div>' +
-            '<div class="card-label">总收入</div>' +
+            '<div class="card-label">总收入（全年）</div>' +
             '<div class="card-value income">¥' + formatMoney(yearIncome) + '</div>' +
         '</div>' +
         '<div class="summary-card">' +
             '<div class="card-icon">📉</div>' +
-            '<div class="card-label">总支出</div>' +
+            '<div class="card-label">总支出（全年）</div>' +
             '<div class="card-value expense">¥' + formatMoney(yearExpense) + '</div>' +
         '</div>' +
         '<div class="summary-card">' +
