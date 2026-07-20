@@ -62,11 +62,6 @@
 </head>
 <body>
     <!-- 版本标识 v21 -->
-    <!-- 添加到主屏幕引导条（仅浏览器内显示，PWA模式下隐藏） -->
-    <div class="pwa-install-banner" id="pwaInstallBanner" style="display:none;">
-        <span class="pwa-banner-text">💡 点击浏览器菜单 →「添加到主屏幕」，获得全屏沉浸体验</span>
-        <button class="pwa-banner-close" onclick="document.getElementById('pwaInstallBanner').style.display='none'">✕</button>
-    </div>
     <!-- 登录界面 -->
     <div class="login-overlay" id="loginOverlay">
         <div class="login-card">
@@ -97,7 +92,7 @@
                 </div>
             </div>
         </div>
-        <div style="text-align:center;color:var(--text-secondary);font-size:11px;margin-top:8px;opacity:0.6;">v23</div>
+        <div style="text-align:center;color:var(--text-secondary);font-size:11px;margin-top:8px;opacity:0.6;">v24</div>
     </div>
 
     <!-- 忘记密码弹窗 -->
@@ -775,7 +770,7 @@
     <!-- Toast 提示 -->
     <div class="toast" id="toast"></div>
 
-    <script src="app.js?v=23"></script>
+    <script src="app.js?v=24"></script>
     <script>
     (function(){
         function showForgot(){
