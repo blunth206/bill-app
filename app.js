@@ -704,6 +704,18 @@ function doLogin(auto) {
     });
 }
 
+// 全屏切换（点击按钮切换全屏/退出全屏）
+function toggleFullscreen() {
+    if (!document.fullscreenElement && !document.webkitFullscreenElement) {
+        var el = document.documentElement;
+        if (el.requestFullscreen) { el.requestFullscreen().catch(function(){});
+        } else if (el.webkitRequestFullscreen) { el.webkitRequestFullscreen(); }
+    } else {
+        if (document.exitFullscreen) { document.exitFullscreen();
+        } else if (document.webkitExitFullscreen) { document.webkitExitFullscreen(); }
+    }
+}
+
 function doLogout() {
     APP_DATA.currentAccountId = null;
     document.getElementById('loginOverlay').style.display = 'flex';
