@@ -219,17 +219,14 @@ function syncPull() {
         if (!cloudData.bills) return false;
         // 记录 SHA 供后续更新使用
         _SYNC_SHA = fileInfo.sha;
-        // 合并账单：按 updatedAt 比较，只保留更新的版本
+        // 字段级合并账单：逐字段比较 fieldTimestamps，各取最新值
         var billMap = {};
         APP_DATA.bills.forEach(function(b) { billMap[b.id] = b; });
         (cloudData.bills || []).forEach(function(cb) {
             if (!billMap[cb.id]) {
                 billMap[cb.id] = cb;
             } else {
-                var lt = billMap[cb.id].updatedAt || '';
-                var ct = cb.updatedAt || '';
-                // 云端更新才覆盖本地
-                if (ct > lt) billMap[cb.id] = cb;
+                mergeBillByFields(billMap[cb.id], cb);
             }
         });
         APP_DATA.bills = Object.values(billMap);
@@ -388,12 +385,66 @@ const APP_DATA = {
     currentAccountId: null,
 };
 
+// ==================== 字段级时间戳（多端同步冲突解决） ====================
+var _BILL_FIELDS = ['userId', 'date', 'type', 'amount', 'note', 'source'];
+
+// 初始化一条账单的 fieldTimestamps（新建时调用）
+function initBillFieldTimestamps(bill, time) {
+    var t = time || new Date().toISOString();
+    bill.fieldTimestamps = {};
+    _BILL_FIELDS.forEach(function(f) { bill.fieldTimestamps[f] = t; });
+}
+
+// 标记账单中哪些字段被修改了（编辑时调用）
+function markBillFieldsChanged(bill, fields) {
+    if (!bill.fieldTimestamps) initBillFieldTimestamps(bill, bill.updatedAt || undefined);
+    var t = new Date().toISOString();
+    fields.forEach(function(f) { if (_BILL_FIELDS.indexOf(f) !== -1) bill.fieldTimestamps[f] = t; });
+    bill.updatedAt = t;
+}
+
+// 设置账单单个字段（自动记录字段时间戳）
+function setBillField(bill, field, value) {
+    if (!bill.fieldTimestamps) initBillFieldTimestamps(bill, bill.updatedAt || undefined);
+    bill[field] = value;
+    bill.fieldTimestamps[field] = new Date().toISOString();
+    bill.updatedAt = bill.fieldTimestamps[field];
+}
+
+// 字段级合并：云端和本地逐字段比较时间戳，各取最新值
+function mergeBillByFields(localBill, cloudBill) {
+    if (!localBill.fieldTimestamps) initBillFieldTimestamps(localBill, localBill.updatedAt || undefined);
+    if (!cloudBill.fieldTimestamps) initBillFieldTimestamps(cloudBill, cloudBill.updatedAt || undefined);
+    var lfs = localBill.fieldTimestamps;
+    var cfs = cloudBill.fieldTimestamps;
+    var hadConflict = false;
+    _BILL_FIELDS.forEach(function(field) {
+        var lt = lfs[field] || '';
+        var ct = cfs[field] || '';
+        if (ct > lt) {
+            localBill[field] = cloudBill[field];
+            lfs[field] = ct;
+        } else if (ct && lt && ct !== lt) {
+            // 双方都改过这个字段且时间不同 → 云端更新的获胜（ct > lt已处理）
+            // 如果 lt > ct，保留本地版本
+            hadConflict = true;
+        }
+    });
+    if ((cloudBill.updatedAt || '') > (localBill.updatedAt || '')) {
+        localBill.updatedAt = cloudBill.updatedAt;
+    }
+    return hadConflict;
+}
+
 function saveData() {
     var now = new Date().toISOString();
     // 给所有记录自动加上更新时间戳（缺失时补充）
     APP_DATA.accounts.forEach(function(a) { if (!a.updatedAt) a.updatedAt = now; });
     APP_DATA.billUsers.forEach(function(u) { if (!u.updatedAt) u.updatedAt = now; });
-    APP_DATA.bills.forEach(function(b) { if (!b.updatedAt) b.updatedAt = now; });
+    APP_DATA.bills.forEach(function(b) {
+        if (!b.updatedAt) b.updatedAt = now;
+        if (!b.fieldTimestamps) initBillFieldTimestamps(b, now);
+    });
     
     _IDB.setItem('billApp_data', {
         accounts: APP_DATA.accounts,
@@ -1158,6 +1209,9 @@ function saveEditBill() {
     var userId = document.getElementById('editBillUser').value;
     if (!userId) { showToast('请选择账单户', 'error'); return; }
 
+    // 记录修改前值，用于精确追踪变更字段
+    var old = { userId: b.userId, date: b.date, type: b.type, amount: b.amount, note: b.note || '', source: b.source || '' };
+    
     b.userId = userId;
     b.date = document.getElementById('editBillDate').value;
     b.type = document.getElementById('editBillType').value;
@@ -1167,7 +1221,17 @@ function saveEditBill() {
     b.amount = amount;
     b.note = document.getElementById('editBillNote').value;
     b.source = document.getElementById('editBillSource').value;
-    b.updatedAt = new Date().toISOString();
+    
+    // 精确标记实际变更的字段
+    var changed = [];
+    if (old.userId !== b.userId) changed.push('userId');
+    if (old.date !== b.date) changed.push('date');
+    if (old.type !== b.type) changed.push('type');
+    if (old.amount !== b.amount) changed.push('amount');
+    if (String(old.note) !== String(b.note || '')) changed.push('note');
+    if (String(old.source) !== String(b.source || '')) changed.push('source');
+    if (changed.length > 0) markBillFieldsChanged(b, changed);
+    
     saveData();
     closeEditBillModal();
     renderHomeView();
@@ -1628,10 +1692,11 @@ function saveBatchEdit() {
         return;
     }
 
+    var changedFields = Object.keys(updates);
     APP_DATA.bills.forEach(function(b) {
         if (selectedBillIds.indexOf(b.id) !== -1) {
-            Object.keys(updates).forEach(function(key) { b[key] = updates[key]; });
-            b.updatedAt = new Date().toISOString();
+            changedFields.forEach(function(key) { b[key] = updates[key]; });
+            markBillFieldsChanged(b, changedFields);
         }
     });
 
@@ -1677,7 +1742,7 @@ function addManualEntry() {
     if (!amount || amount === 0 || isNaN(amount)) { showToast('请输入有效金额', 'error'); return; }
     if (type !== '结余' && amount < 0) { showToast('支出/收入金额不能为负数', 'error'); return; }
 
-    APP_DATA.bills.push({
+    var bill = {
         id: generateId('bill'),
         userId: userId,
         date: date,
@@ -1687,7 +1752,9 @@ function addManualEntry() {
         source: '手动录入',
         createdAt: Date.now(),
         updatedAt: new Date().toISOString()
-    });
+    };
+    initBillFieldTimestamps(bill);
+    APP_DATA.bills.push(bill);
     saveData();
     closeManualEntry();
     renderHomeView();
@@ -2797,6 +2864,7 @@ function confirmImport() {
             createdAt: Date.now(),
             updatedAt: new Date().toISOString()
         });
+        initBillFieldTimestamps(APP_DATA.bills[APP_DATA.bills.length - 1]);
         count++;
     });
     saveData();
