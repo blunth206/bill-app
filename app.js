@@ -128,19 +128,26 @@ function _apiFetch(method, path, body) {
         'Authorization': 'token ' + _SYNC_TOKEN,
         'Accept': 'application/vnd.github.v3+json'
     };
-    var opts = { method: method, headers: headers };
+    var opts = { method: method, headers: headers, cache: 'no-store' };
     if (body) {
         headers['Content-Type'] = 'application/json';
         opts.body = JSON.stringify(body);
     }
-    return fetch('https://api.github.com' + path, opts).then(function(r) {
+    var url = 'https://api.github.com' + path;
+    console.log('[同步] API请求:', method, url, body ? '(有body)' : '');
+    return fetch(url, opts).then(function(r) {
         if (!r.ok) {
             if (r.status === 401 || r.status === 403) {
                 updateSyncStatus('Token无效');
                 _SYNC_READY = false;
             }
             if (r.status === 404) return null; // 文件不存在
-            throw new Error('API ' + r.status);
+            return r.text().then(function(text) {
+                var detail = '';
+                try { var err = JSON.parse(text); if (err && err.message) detail = err.message; } catch(e) {}
+                console.error('[同步] API错误响应', r.status, text.substring(0, 400));
+                throw new Error('API ' + r.status + (detail ? ': ' + detail : ''));
+            });
         }
         return r.json();
     });
@@ -188,7 +195,7 @@ function syncPush(retryCount) {
     };
     if (_SYNC_SHA) body.sha = _SYNC_SHA;
 
-    console.log('[同步] 推送中... 账单' + localBillCount + '条, 重试#' + attempt);
+    console.log('[同步] 推送中... 账单' + localBillCount + '条, 尝试' + (attempt + 1) + '/' + (_PUSH_MAX_RETRY + 1));
     return _apiFetch('PUT', _SYNC_PATH, body).then(function(r) {
         if (r && r.content && r.content.sha) {
             _SYNC_SHA = r.content.sha;
@@ -200,15 +207,14 @@ function syncPush(retryCount) {
         if (attempt > 0) showToast('云端同步成功', 'success');
         return r;
     }).catch(function(e) {
-        // SHA冲突自动重试：先获取最新SHA再推送
-        if (attempt < _PUSH_MAX_RETRY && e.message && e.message.indexOf('API ') === 0) {
-            console.log('[同步] 推送冲突，重试 ' + (attempt+1) + '/' + _PUSH_MAX_RETRY);
-            _IS_SYNCING = false;
-            return _apiFetch('GET', _SYNC_PATH).then(function(fileInfo) {
-                if (fileInfo && fileInfo.sha) {
-                    _SYNC_SHA = fileInfo.sha;
-                }
-                return syncPush(attempt + 1);
+        // 只有 409 云端冲突才重试，且先拉取合并后再推送
+        if (attempt < _PUSH_MAX_RETRY && e.message && e.message.indexOf('API 409') === 0) {
+            console.log('[同步] 检测到云端冲突，' + (attempt + 1) + '/' + _PUSH_MAX_RETRY + ' 秒后拉取合并再推送');
+            return new Promise(function(resolve) { setTimeout(resolve, 1000 + attempt * 1000); }).then(function() {
+                _IS_SYNCING = false; // 临时放开，让 syncPull 拉取最新数据
+                return syncPull().then(function() {
+                    return syncPush(attempt + 1);
+                });
             });
         }
         console.error('[同步] 推送失败:', e.message || e);
