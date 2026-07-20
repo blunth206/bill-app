@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
     <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="梯众楼梯流水账">
     <meta name="theme-color" content="#4A90D9">
     <title>梯众楼梯流水账</title>
@@ -61,6 +61,11 @@
     </script>
 </head>
 <body>
+    <!-- 添加到主屏幕引导条（仅浏览器内显示，PWA模式下隐藏） -->
+    <div class="pwa-install-banner" id="pwaInstallBanner" style="display:none;">
+        <span class="pwa-banner-text">💡 点击下方「添加到主屏幕」，获得全屏沉浸体验</span>
+        <button class="pwa-banner-close" onclick="document.getElementById('pwaInstallBanner').style.display='none'">✕</button>
+    </div>
     <!-- 登录界面 -->
     <div class="login-overlay" id="loginOverlay">
         <div class="login-card">
@@ -767,7 +772,7 @@
     <!-- Toast 提示 -->
     <div class="toast" id="toast"></div>
 
-    <script src="app.js?v=18"></script>
+    <script src="app.js?v=19"></script>
     <script>
     (function(){
         function showForgot(){
