@@ -1694,6 +1694,69 @@ body {
 
 .preview-amount-input { text-align: right; }
 .preview-note-input { min-width: 150px; }
+
+/* 预览区简易计算器 */
+.preview-calc {
+    margin-top: 8px;
+    padding: 10px;
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+}
+.calc-display {
+    font-size: 20px;
+    font-weight: 600;
+    text-align: right;
+    padding: 10px 12px;
+    background: #F5F6FA;
+    border-radius: 6px;
+    margin-bottom: 8px;
+    min-height: 40px;
+    word-break: break-all;
+    color: var(--text);
+    font-family: monospace;
+}
+.calc-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 4px;
+}
+.calc-btn {
+    padding: 10px 0;
+    font-size: 16px;
+    font-weight: 600;
+    border: 1px solid #e0e0e0;
+    border-radius: 6px;
+    background: #fff;
+    cursor: pointer;
+    user-select: none;
+    transition: background 0.15s;
+    color: var(--text);
+}
+.calc-btn:active { background: #e8e8e8; }
+.calc-btn.calc-op {
+    background: #FFF3E0;
+    color: #E65100;
+    font-size: 18px;
+}
+.calc-btn.calc-op:active { background: #FFE0B2; }
+.calc-btn.calc-eq {
+    background: var(--primary);
+    color: #fff;
+    font-size: 18px;
+}
+.calc-btn.calc-eq:active { background: var(--primary-dark, #0056b3); }
+.calc-btn.calc-clr {
+    background: #f5f5f5;
+    color: #d32f2f;
+    font-size: 14px;
+}
+.calc-btn.calc-fill {
+    background: #E8F5E9;
+    color: #2E7D32;
+    font-size: 14px;
+}
+.calc-btn.calc-fill:active { background: #C8E6C9; }
 .preview-type-select {
     padding: 4px 8px;
     border: 1px solid #ddd;
