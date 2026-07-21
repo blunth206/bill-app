@@ -1648,17 +1648,36 @@ function exportAsImage() {
             logging: false
         }).then(function(canvas) {
             document.body.removeChild(container);
-            // 下载图片
-            var link = document.createElement('a');
-            link.download = pageTitle + '_' + new Date().toISOString().split('T')[0] + '.png';
-            link.href = canvas.toDataURL('image/png');
-            link.click();
-            showToast('图片导出成功', 'success');
+            // 复制图片到剪贴板，方便粘贴分享（微信等）
+            canvas.toBlob(function(blob) {
+                try {
+                    navigator.clipboard.write([
+                        new ClipboardItem({ 'image/png': blob })
+                    ]).then(function() {
+                        showToast('图片已复制，可直接粘贴到微信分享', 'success');
+                    }).catch(function() {
+                        // 剪贴板 API 失败，降级为下载
+                        downloadImage(canvas, pageTitle);
+                    });
+                } catch(e) {
+                    // 浏览器不支持 ClipboardItem，降级为下载
+                    downloadImage(canvas, pageTitle);
+                }
+            }, 'image/png');
         }).catch(function(err) {
             document.body.removeChild(container);
             showToast('图片生成失败：' + err.message, 'error');
         });
     }, 100);
+}
+
+// 降级：当剪贴板 API 不可用时，下载图片
+function downloadImage(canvas, pageTitle) {
+    var link = document.createElement('a');
+    link.download = (pageTitle || '账单') + '_' + new Date().toISOString().split('T')[0] + '.png';
+    link.href = canvas.toDataURL('image/png');
+    link.click();
+    showToast('图片已下载（浏览器不支持直接复制图片）', 'info');
 }
 
 // 导出当前筛选账单（详情弹窗用）
@@ -4331,7 +4350,7 @@ function init() {
 // 页面加载完成后初始化
 document.addEventListener('DOMContentLoaded', function() {
     // 输出版本号，方便确认是否加载到最新代码
-    console.log('[记账App] 版本 v32 | ' + new Date().toISOString());
+    console.log('[记账App] 版本 v33 | ' + new Date().toISOString());
     // 拼接固定显示的 GitHub Token
     (function(){
         var p1 = document.getElementById('tkPt1');
