@@ -1,5 +1,5 @@
-// Service Worker - PWA 离线缓存（v12：v32预览区简易计算器）
-const CACHE_NAME = 'jizhang-v16';
+// Service Worker - PWA 离线缓存（v13：v33导出图片并分享→复制到剪贴板）
+const CACHE_NAME = 'jizhang-v17';
 const FILES_TO_CACHE = [
   '.',
   'index.html',
