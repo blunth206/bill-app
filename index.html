@@ -11,7 +11,7 @@
     <link rel="manifest" href="manifest.json">
     <link rel="icon" type="image/png" href="favicon-32.png">
     <link rel="apple-touch-icon" href="apple-touch-icon.png">
-    <link rel="stylesheet" href="style.css?v=31">
+    <link rel="stylesheet" href="style.css?v=32">
     <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
     <script>
@@ -93,7 +93,7 @@
                     </div>
                 </div>
             </div>
-            <div style="color:#fff;font-size:12px;margin-top:10px;opacity:0.8;background:rgba(255,255,255,0.1);padding:3px 12px;border-radius:10px;">v31</div>
+            <div style="color:#fff;font-size:12px;margin-top:10px;opacity:0.8;background:rgba(255,255,255,0.1);padding:3px 12px;border-radius:10px;">v32</div>
         </div>
     </div>
 
@@ -472,11 +472,38 @@
                     <button class="btn btn-outline btn-sm" onclick="openManualEntry()">✏️ 手动录入账单</button>
                 </div>
                 <div class="preview-area" id="previewArea" style="display:none;">
-                    <h4>预览解析结果（共 <span id="previewCount">0</span> 条）</h4>
                     <div class="dup-warning-bar" id="dupWarningBar" style="display:none;">
                         <span class="dup-warning-icon">⚠️</span>
                         <span>检测到 <strong id="dupCountBadge">0</strong> 条与已有数据重复的记录</span>
                         <button class="btn btn-outline btn-sm" id="removeDupBtn" onclick="removeDuplicates()" title="从预览中移除所有重复数据">排除重复</button>
+                    </div>
+                    <div style="display:flex;align-items:center;justify-content:space-between;margin-top:12px;flex-wrap:wrap;gap:6px;">
+                        <h4 style="margin:0;font-size:14px;">预览解析结果（共 <span id="previewCount">0</span> 条）</h4>
+                        <button class="btn btn-outline btn-sm" onclick="togglePreviewCalc()" id="calcToggleBtn" style="font-size:12px;">🧮 计算器</button>
+                    </div>
+                    <div class="preview-calc" id="previewCalc" style="display:none;">
+                        <div class="calc-display" id="calcDisplay">0</div>
+                        <div class="calc-grid">
+                            <button class="calc-btn" onclick="calcInput('7')">7</button>
+                            <button class="calc-btn" onclick="calcInput('8')">8</button>
+                            <button class="calc-btn" onclick="calcInput('9')">9</button>
+                            <button class="calc-btn calc-op" onclick="calcInput('/')">÷</button>
+                            <button class="calc-btn" onclick="calcInput('4')">4</button>
+                            <button class="calc-btn" onclick="calcInput('5')">5</button>
+                            <button class="calc-btn" onclick="calcInput('6')">6</button>
+                            <button class="calc-btn calc-op" onclick="calcInput('*')">×</button>
+                            <button class="calc-btn" onclick="calcInput('1')">1</button>
+                            <button class="calc-btn" onclick="calcInput('2')">2</button>
+                            <button class="calc-btn" onclick="calcInput('3')">3</button>
+                            <button class="calc-btn calc-op" onclick="calcInput('-')">−</button>
+                            <button class="calc-btn" onclick="calcInput('0')">0</button>
+                            <button class="calc-btn" onclick="calcInput('.')">.</button>
+                            <button class="calc-btn calc-eq" onclick="calcEqual()">=</button>
+                            <button class="calc-btn calc-op" onclick="calcInput('+')">+</button>
+                            <button class="calc-btn calc-clr" onclick="calcClear()">C</button>
+                            <button class="calc-btn calc-clr" onclick="calcBack()">⌫</button>
+                            <button class="calc-btn calc-fill" onclick="calcFill()" colspan="2" style="grid-column:span 2;">↓ 填入金额</button>
+                        </div>
                     </div>
                     <div class="preview-table-wrap">
                         <table class="preview-table">
@@ -791,7 +818,7 @@
     <!-- Toast 提示 -->
     <div class="toast" id="toast"></div>
 
-    <script src="app.js?v=31"></script>
+    <script src="app.js?v=32"></script>
     <script>
     (function(){
         function showForgot(){
