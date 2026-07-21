@@ -1,5 +1,5 @@
-// Service Worker - PWA 离线缓存（v14：v34查重修复+内联计算器+登录修复）
-const CACHE_NAME = 'jizhang-v18';
+// Service Worker - PWA 离线缓存（v15：v34紧急恢复+默认账号保险）
+const CACHE_NAME = 'jizhang-v19';
 const FILES_TO_CACHE = [
   '.',
   'index.html',
