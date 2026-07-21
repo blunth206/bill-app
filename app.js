@@ -1,5 +1,3 @@
-// ==================== IndexedDB 存储层（替代 localStorage，容量近乎无限） ====================
-var _IDB = (function() {
     var DB_NAME = 'BillAppDB';
     var DB_VERSION = 1;
     var STORE_NAME = 'kvStore';
@@ -2838,23 +2836,32 @@ function parseExcelDate(val) {
 // ==================== 重复数据检测 ====================
 function checkDuplicates(bills, userId) {
     // 对每条待导入账单，检查是否与已有数据重复
-    // 判定标准：同一账单户 + 同一日期 + 同一类型 + 金额相同(容差0.01) + 备注相似
-    var existing = APP_DATA.bills;
+    // 判定标准：同一账单户 + 同一日期 + 同一类型 + 金额相同(容差0.01)
+    // 备注用于区分同名交易，但如果日期+类型+金额都相同，即使备注不同也标记为疑似重复
+    var existing = APP_DATA.bills.filter(function(ex) {
+        return ex.userId === userId;
+    });
     return bills.map(function(bill) {
         var dup = existing.find(function(ex) {
             if (ex.date !== bill.date) return false;
             if (ex.type !== bill.type) return false;
             if (Math.abs((ex.amount || 0) - (bill.amount || 0)) > 0.01) return false;
-            // 备注：完全相同 或 一方包含另一方
-            var n1 = (ex.note || '').trim();
-            var n2 = (bill.note || '').trim();
-            if (n1 && n2 && n1 !== n2) {
-                if (n1.indexOf(n2) === -1 && n2.indexOf(n1) === -1) return false;
-            }
             return true;
         });
+        // 如果日期+类型+金额都匹配，标记为重复
+        // 如果备注也匹配（完全相同或包含关系），则确认重复
+        var noteMatch = false;
+        if (dup) {
+            var n1 = (dup.note || '').trim();
+            var n2 = (bill.note || '').trim();
+            // 一方为空、完全相同、或一方包含另一方都算备注匹配
+            if (!n1 || !n2 || n1 === n2 || n1.indexOf(n2) >= 0 || n2.indexOf(n1) >= 0) {
+                noteMatch = true;
+            }
+        }
         return {
             isDuplicate: !!dup,
+            noteMatch: noteMatch,
             matchedId: dup ? dup.id : null,
             matchedNote: dup ? (dup.note || '') : ''
         };
@@ -2870,6 +2877,8 @@ function showPreview(bills, userId) {
     var dupResults = checkDuplicates(bills, userId);
     window._dupResults = dupResults;
     var dupCount = dupResults.filter(function(d) { return d.isDuplicate; }).length;
+    var exactDupCount = dupResults.filter(function(d) { return d.isDuplicate && d.noteMatch; }).length;
+    var suspectDupCount = dupCount - exactDupCount;
     
     document.getElementById('previewCount').textContent = bills.length;
     document.getElementById('previewArea').style.display = 'block';
@@ -2877,11 +2886,16 @@ function showPreview(bills, userId) {
     // 显示/隐藏重复警告
     var dupBar = document.getElementById('dupWarningBar');
     var dupBadge = document.getElementById('dupCountBadge');
+    var dupWarnText = document.getElementById('dupWarningText');
     var removeDupBtn = document.getElementById('removeDupBtn');
     if (dupCount > 0) {
         dupBar.style.display = 'flex';
         dupBadge.textContent = dupCount;
         removeDupBtn.style.display = '';
+        var warnParts = [];
+        if (exactDupCount > 0) warnParts.push('确认重复 <strong>' + exactDupCount + '</strong> 条');
+        if (suspectDupCount > 0) warnParts.push('疑似重复 <strong>' + suspectDupCount + '</strong> 条');
+        dupWarnText.innerHTML = '⚠️ ' + warnParts.join('，');
     } else {
         dupBar.style.display = 'none';
     }
@@ -2889,9 +2903,18 @@ function showPreview(bills, userId) {
     var tbody = document.getElementById('previewTbody');
     var html = '';
     bills.forEach(function(b, idx) {
-        var isDup = dupResults[idx] && dupResults[idx].isDuplicate;
-        var dupClass = isDup ? ' dup-row' : '';
-        var dupIcon = isDup ? ' <span class="dup-icon" title="与已有记录重复：' + escapeHtml(dupResults[idx].matchedNote) + '">⚠️重复</span>' : '';
+        var dr = dupResults[idx];
+        var isDup = dr && dr.isDuplicate;
+        var isExactDup = dr && dr.noteMatch; // 备注也匹配 = 确认重复
+        var dupClass = isDup ? (isExactDup ? ' dup-row' : ' dup-suspect-row') : '';
+        var dupIcon = '';
+        if (isDup) {
+            if (isExactDup) {
+                dupIcon = ' <span class="dup-icon" title="与已有记录重复（备注匹配）：' + escapeHtml(dr.matchedNote || '无备注') + '">⚠️重复</span>';
+            } else {
+                dupIcon = ' <span class="dup-icon-suspect" title="日期+类型+金额相同但备注不同，疑似重复。已有备注：' + escapeHtml(dr.matchedNote || '无备注') + '">⚠️疑似</span>';
+            }
+        }
         var amountClass = b.type === '收入' ? 'amount-income' : (b.type === '结余' ? 'amount-balance' : 'amount-expense');
         html += '<tr class="' + dupClass + '">' +
             '<td><input type="date" class="preview-date-input" value="' + b.date + '" data-idx="' + idx + '" onchange="updatePreviewDate(' + idx + ', this.value);recheckDuplicates();"></td>' +
@@ -2900,7 +2923,7 @@ function showPreview(bills, userId) {
             '<option value="收入"' + (b.type === '收入' ? ' selected' : '') + '>收入</option>' +
             '<option value="结余"' + (b.type === '结余' ? ' selected' : '') + '>结余</option>' +
             '</select></td>' +
-            '<td><input type="number" step="0.01" class="preview-amount-input" value="' + b.amount + '" onchange="updatePreviewAmount(' + idx + ', this.value);recheckDuplicates();"></td>' +
+            '<td><input type="text" inputmode="decimal" class="preview-amount-input" value="' + b.amount + '" onchange="updatePreviewAmount(' + idx + ', this.value);recheckDuplicates();" onkeydown="handleAmountKeydown(event, this, ' + idx + ');"></td>' +
             '<td><input type="text" class="preview-note-input" value="' + (b.note || '') + '" data-idx="' + idx + '" onchange="updatePreviewNote(' + idx + ', this.value);recheckDuplicates();">' + dupIcon + '</td>' +
             '<td><button class="btn-del-row" onclick="deletePreviewRow(' + idx + ')" title="删除此行" style="background:none;border:none;cursor:pointer;font-size:18px;padding:4px 8px;color:#999;border-radius:4px;">&times;</button></td>' +
             '</tr>';
@@ -2914,38 +2937,48 @@ function recheckDuplicates() {
     var results = checkDuplicates(window._previewBills, window._previewUserId);
     window._dupResults = results;
     var dupCount = results.filter(function(d) { return d.isDuplicate; }).length;
+    var exactDupCount = results.filter(function(d) { return d.isDuplicate && d.noteMatch; }).length;
+    var suspectDupCount = dupCount - exactDupCount;
     
-    // 更新行样式
+    // 更新行样式和图标
     var rows = document.querySelectorAll('#previewTbody tr');
     rows.forEach(function(row, idx) {
-        if (results[idx] && results[idx].isDuplicate) {
-            row.classList.add('dup-row');
-        } else {
-            row.classList.remove('dup-row');
+        var dr = results[idx];
+        var isDup = dr && dr.isDuplicate;
+        var isExactDup = dr && dr.noteMatch;
+        
+        row.classList.remove('dup-row', 'dup-suspect-row');
+        if (isDup) {
+            row.classList.add(isExactDup ? 'dup-row' : 'dup-suspect-row');
         }
+        
         // 更新重复图标
         var noteCell = row.querySelector('td:nth-child(4)');
         if (noteCell) {
-            var existingIcon = noteCell.querySelector('.dup-icon');
-            if (results[idx] && results[idx].isDuplicate) {
-                if (!existingIcon) {
-                    noteCell.innerHTML = noteCell.innerHTML.replace(/<\/input>/, '</input> <span class="dup-icon" title="与已有记录重复：' + escapeHtml(results[idx].matchedNote) + '">⚠️重复</span>');
-                } else {
-                    existingIcon.title = '与已有记录重复：' + escapeHtml(results[idx].matchedNote);
-                }
-            } else if (existingIcon) {
-                existingIcon.remove();
+            var allIcons = noteCell.querySelectorAll('.dup-icon, .dup-icon-suspect');
+            allIcons.forEach(function(icon) { icon.remove(); });
+            
+            if (isDup) {
+                var iconHtml = isExactDup
+                    ? '<span class="dup-icon" title="与已有记录重复（备注匹配）：' + escapeHtml(dr.matchedNote || '无备注') + '">⚠️重复</span>'
+                    : '<span class="dup-icon-suspect" title="日期+类型+金额相同但备注不同，疑似重复。已有备注：' + escapeHtml(dr.matchedNote || '无备注') + '">⚠️疑似</span>';
+                noteCell.querySelector('input').insertAdjacentHTML('afterend', iconHtml);
             }
         }
     });
     
     var dupBar = document.getElementById('dupWarningBar');
     var dupBadge = document.getElementById('dupCountBadge');
+    var dupWarnText = document.getElementById('dupWarningText');
     var removeDupBtn = document.getElementById('removeDupBtn');
     if (dupCount > 0) {
         dupBar.style.display = 'flex';
         dupBadge.textContent = dupCount;
         removeDupBtn.style.display = '';
+        var warnParts = [];
+        if (exactDupCount > 0) warnParts.push('确认重复 <strong>' + exactDupCount + '</strong> 条');
+        if (suspectDupCount > 0) warnParts.push('疑似重复 <strong>' + suspectDupCount + '</strong> 条');
+        dupWarnText.innerHTML = '⚠️ ' + warnParts.join('，');
     } else {
         dupBar.style.display = 'none';
     }
@@ -2992,9 +3025,52 @@ function updatePreviewNote(idx, val) {
 }
 
 function updatePreviewAmount(idx, val) {
-    var amt = parseFloat(val);
+    // 支持内联计算表达式：=125-114 自动计算结果
+    var strVal = String(val).trim();
+    if (strVal.startsWith('=') && strVal.length > 1) {
+        strVal = evalAmountExpr(strVal.substring(1));
+    }
+    var amt = parseFloat(strVal);
     if (!isNaN(amt) && amt >= 0 && window._previewBills && window._previewBills[idx]) {
         window._previewBills[idx].amount = amt;
+    }
+}
+
+// 安全计算金额表达式
+function evalAmountExpr(expr) {
+    if (!/^[0-9+\-*/.() ]+$/.test(expr)) return expr;
+    try {
+        var result = eval(expr);
+        if (typeof result === 'number' && isFinite(result)) {
+            return String(Math.round(result * 100) / 100);
+        }
+    } catch(e) {}
+    return expr;
+}
+
+// 金额输入框键盘事件：Enter 触发 = 表达式计算
+function handleAmountKeydown(e, input, idx) {
+    if (e.key === 'Enter') {
+        e.preventDefault();
+        var val = input.value.trim();
+        if (val.startsWith('=') && val.length > 1) {
+            var expr = val.substring(1);
+            if (/^[0-9+\-*/.() ]+$/.test(expr)) {
+                try {
+                    var result = eval(expr);
+                    if (typeof result === 'number' && isFinite(result)) {
+                        result = Math.round(result * 100) / 100;
+                        input.value = result;
+                        updatePreviewAmount(idx, result);
+                        if (typeof recheckDuplicates === 'function') recheckDuplicates();
+                        return;
+                    }
+                } catch(ex) {}
+            }
+        }
+        // 非表达式或计算失败，直接按普通金额处理
+        updatePreviewAmount(idx, input.value);
+        if (typeof recheckDuplicates === 'function') recheckDuplicates();
     }
 }
 
