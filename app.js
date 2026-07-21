@@ -599,6 +599,27 @@ function formatDate(dateStr) {
 }
 
 // ==================== 登录系统 ====================
+// 紧急恢复：手动创建默认管理员账号
+function emergencyCreateAdmin() {
+    if (APP_DATA.accounts.length === 0) {
+        APP_DATA.accounts.push({
+            id: 'admin_default',
+            name: '管理员',
+            password: '123456',
+            role: 'admin',
+            createdAt: new Date().toISOString()
+        });
+        saveData();
+    }
+    initLogin();
+    var sel = document.getElementById('loginAccountSelect');
+    if (sel && sel.options.length > 1) {
+        showToast('已创建默认管理员账号，请登录', 'success');
+    } else {
+        showToast('账号恢复失败，请刷新页面重试', 'error');
+    }
+}
+
 function initLogin() {
     // 保险：如果账号列表为空，立即创建默认管理员（避免因异步时序问题导致无账号可选）
     if (APP_DATA.accounts.length === 0) {
@@ -619,6 +640,42 @@ function initLogin() {
         opt.textContent = acc.name + (acc.role === 'admin' ? ' (管理员)' : '');
         sel.appendChild(opt);
     });
+    
+    // 双重保险：短暂延时后再次检查下拉框，若仍只有占位选项则强制添加管理员
+    setTimeout(function() {
+        if (sel.options.length <= 1) {
+            console.warn('[登录] 下拉框为空，触发紧急恢复');
+            if (APP_DATA.accounts.length === 0) {
+                APP_DATA.accounts.push({
+                    id: 'admin_default',
+                    name: '管理员',
+                    password: '123456',
+                    role: 'admin',
+                    createdAt: new Date().toISOString()
+                });
+                saveData();
+            }
+            APP_DATA.accounts.forEach(function(acc) {
+                if (!Array.from(sel.options).some(function(o) { return o.value === acc.id; })) {
+                    var opt = document.createElement('option');
+                    opt.value = acc.id;
+                    opt.textContent = acc.name + (acc.role === 'admin' ? ' (管理员)' : '');
+                    sel.appendChild(opt);
+                }
+            });
+        }
+        var emergencyLink = document.getElementById('emergencyCreateAdminLink');
+        if (emergencyLink) {
+            emergencyLink.style.display = (sel.options.length <= 1) ? 'inline' : 'none';
+        }
+    }, 100);
+    
+    // 显示/隐藏紧急创建账号链接
+    var emergencyLink = document.getElementById('emergencyCreateAdminLink');
+    if (emergencyLink) {
+        emergencyLink.style.display = (APP_DATA.accounts.length === 0) ? 'inline' : 'none';
+    }
+    
     // 恢复上次登录账号和记住的密码
     var lastId = _CACHE.lastAcct;
     var savedCred = _CACHE.cred;
@@ -4431,6 +4488,20 @@ function init() {
         if (lastId && APP_DATA.accounts.find(function(a) { return a.id === lastId; })) {
             // 用户之前登录过，显示登录界面
         }
+    }).catch(function(e) {
+        console.error('[初始化] 初始化流程失败:', e);
+        // 任何初始化错误都不应阻塞登录，强制创建默认账号
+        if (APP_DATA.accounts.length === 0) {
+            APP_DATA.accounts.push({
+                id: 'admin_default',
+                name: '管理员',
+                password: '123456',
+                role: 'admin',
+                createdAt: new Date().toISOString()
+            });
+            saveData();
+        }
+        initLogin();
     });
 }
 
