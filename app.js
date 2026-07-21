@@ -600,6 +600,17 @@ function formatDate(dateStr) {
 
 // ==================== 登录系统 ====================
 function initLogin() {
+    // 保险：如果账号列表为空，立即创建默认管理员（避免因异步时序问题导致无账号可选）
+    if (APP_DATA.accounts.length === 0) {
+        APP_DATA.accounts.push({
+            id: 'admin_default',
+            name: '管理员',
+            password: '123456',
+            role: 'admin',
+            createdAt: new Date().toISOString()
+        });
+        saveData();
+    }
     var sel = document.getElementById('loginAccountSelect');
     sel.innerHTML = '<option value="">-- 选择账号 --</option>';
     APP_DATA.accounts.forEach(function(acc) {
@@ -4426,7 +4437,7 @@ function init() {
 // 页面加载完成后初始化
 document.addEventListener('DOMContentLoaded', function() {
     // 输出版本号，方便确认是否加载到最新代码
-    console.log('[记账App] 版本 v33 | ' + new Date().toISOString());
+    console.log('[记账App] 版本 v34 | ' + new Date().toISOString());
     // 拼接固定显示的 GitHub Token
     (function(){
         var p1 = document.getElementById('tkPt1');
