@@ -1,3 +1,5 @@
+// ==================== IndexedDB 存储层（替代 localStorage，容量近乎无限） ====================
+var _IDB = (function() {
     var DB_NAME = 'BillAppDB';
     var DB_VERSION = 1;
     var STORE_NAME = 'kvStore';
