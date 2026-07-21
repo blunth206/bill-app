@@ -2998,6 +2998,113 @@ function deletePreviewRow(idx) {
     showPreview(window._previewBills, window._previewUserId);
 }
 
+// ===== 预览区简易计算器 =====
+window._calcLastFocusedInput = null;
+document.addEventListener('focusin', function(e) {
+    if (e.target && e.target.classList.contains('preview-amount-input')) {
+        window._calcLastFocusedInput = e.target;
+    }
+});
+
+function togglePreviewCalc() {
+    var panel = document.getElementById('previewCalc');
+    var btn = document.getElementById('calcToggleBtn');
+    if (panel.style.display === 'none') {
+        panel.style.display = 'block';
+        if (btn) btn.textContent = '🧮 收起';
+    } else {
+        panel.style.display = 'none';
+        if (btn) btn.textContent = '🧮 计算器';
+    }
+}
+
+function calcInput(val) {
+    var disp = document.getElementById('calcDisplay');
+    var cur = disp.textContent;
+    if (cur === '0' || cur === '错误') {
+        // 如果当前是 0，且输入的不是运算符，则替换
+        if ('0123456789.'.indexOf(val) >= 0) {
+            disp.textContent = val;
+        } else {
+            disp.textContent = cur + val;
+        }
+    } else {
+        // 避免连续两个运算符
+        var last = cur.charAt(cur.length - 1);
+        if ('+-*/'.indexOf(val) >= 0 && '+-*/'.indexOf(last) >= 0) {
+            disp.textContent = cur.slice(0, -1) + val;
+        } else {
+            disp.textContent = cur + val;
+        }
+    }
+}
+
+function calcClear() {
+    document.getElementById('calcDisplay').textContent = '0';
+}
+
+function calcBack() {
+    var disp = document.getElementById('calcDisplay');
+    var cur = disp.textContent;
+    if (cur === '错误') {
+        disp.textContent = '0';
+        return;
+    }
+    if (cur.length <= 1) {
+        disp.textContent = '0';
+    } else {
+        disp.textContent = cur.slice(0, -1);
+    }
+}
+
+function calcEqual() {
+    var disp = document.getElementById('calcDisplay');
+    var expr = disp.textContent;
+    if (expr === '' || expr === '错误') {
+        disp.textContent = '0';
+        return;
+    }
+    // 安全校验：只允许数字、运算符、小数点
+    if (!/^[0-9+\-*/.]+$/.test(expr)) {
+        disp.textContent = '错误';
+        return;
+    }
+    try {
+        var result = eval(expr);
+        if (typeof result !== 'number' || !isFinite(result)) {
+            disp.textContent = '错误';
+        } else {
+            // 保留2位小数
+            disp.textContent = String(Math.round(result * 100) / 100);
+        }
+    } catch(e) {
+        disp.textContent = '错误';
+    }
+}
+
+function calcFill() {
+    var disp = document.getElementById('calcDisplay');
+    var val = disp.textContent;
+    if (val === '错误' || val === '0' && disp.textContent.length === 1) {
+        // 检查是否是真正的0还是表达式的一部分
+    }
+    // 先自动计算当前表达式
+    calcEqual();
+    val = disp.textContent;
+    if (val === '错误' || val === '') return;
+    var num = parseFloat(val);
+    if (isNaN(num)) return;
+    var input = window._calcLastFocusedInput;
+    if (input && document.contains(input)) {
+        input.value = num;
+        // 触发 change 事件以更新预览数据
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+        showToast('已填入金额: ' + num, 'success');
+    } else {
+        showToast('请先点击预览中的金额输入框', 'info');
+    }
+}
+
 function confirmImport() {
     var userId = window._previewUserId;
     var bills = window._previewBills;
@@ -4224,7 +4331,7 @@ function init() {
 // 页面加载完成后初始化
 document.addEventListener('DOMContentLoaded', function() {
     // 输出版本号，方便确认是否加载到最新代码
-    console.log('[记账App] 版本 v31 | ' + new Date().toISOString());
+    console.log('[记账App] 版本 v32 | ' + new Date().toISOString());
     // 拼接固定显示的 GitHub Token
     (function(){
         var p1 = document.getElementById('tkPt1');
