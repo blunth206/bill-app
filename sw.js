@@ -1,5 +1,5 @@
-// Service Worker - PWA 离线缓存（v19：缓存优先策略，修复删除账单同步拉回问题）
-const CACHE_NAME = 'jizhang-v24';
+// Service Worker - PWA 离线缓存（v19：缓存优先策略，修复跨设备删除同步问题）
+const CACHE_NAME = 'jizhang-v25';
 const FILES_TO_CACHE = [
   '.',
   'index.html',

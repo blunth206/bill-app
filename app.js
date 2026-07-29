@@ -204,8 +204,8 @@ function syncPush(retryCount) {
         }
         _LAST_SYNC_HASH = hash;
         _lastKnownBillCount = localBillCount;
-        _deletedBills = {};  // 推送成功，清除删除记录
-        _saveDeletedBills();
+        // 推送成功意味着云端已同步当前账单状态，删除记录由后续 pull 确认清理
+        // 注意：不清空 _deletedBills，防止跨设备并发导致误认删除已生效
         updateSyncStatus('已同步');
         console.log('[同步] 推送成功! ' + localBillCount + '条账单');
         if (attempt > 0) showToast('云端同步成功', 'success');
@@ -350,7 +350,9 @@ function syncPull() {
         // 字段级合并账单
         var billMap = {};
         APP_DATA.bills.forEach(function(b) { billMap[b.id] = b; });
+        var cloudBillIds = {};
         (cloudData.bills || []).forEach(function(cb) {
+            cloudBillIds[cb.id] = true;
             if (!billMap[cb.id]) {
                 // 检查是否本地刚删除了此账单（删除时间晚于云端更新时间 → 保留删除）
                 var deletedAt = _deletedBills[cb.id];
@@ -368,10 +370,24 @@ function syncPull() {
                 mergeBillByFields(billMap[cb.id], cb);
             }
         });
+        // 跨设备删除检测：本地有但云端无 → 若云端更新时间晚于账单 → 被其他设备删除
+        var cloudUpdatedAt = cloudData.updatedAt || '';
+        var crossRemoved = 0;
+        if (cloudUpdatedAt) {
+            Object.keys(billMap).forEach(function(bid) {
+                if (!cloudBillIds[bid]) {
+                    var lb = billMap[bid];
+                    if (cloudUpdatedAt > (lb.updatedAt || '')) {
+                        delete billMap[bid];
+                        crossRemoved++;
+                        console.log('[同步] 跨设备删除: ' + bid);
+                    }
+                }
+            });
+        }
+        if (crossRemoved > 0) console.log('[同步] 跨设备删除共 ' + crossRemoved + '条');
         APP_DATA.bills = Object.values(billMap);
         // 清理已确认的删除记录：云端已不存在的账单 → 删除追踪可安全清除
-        var cloudBillIds = {};
-        (cloudData.bills || []).forEach(function(cb) { cloudBillIds[cb.id] = true; });
         var cleanedDeleted = false;
         Object.keys(_deletedBills).forEach(function(delId) {
             if (!cloudBillIds[delId]) {
@@ -5947,7 +5963,7 @@ function init() {
 // 页面加载完成后初始化
 document.addEventListener('DOMContentLoaded', function() {
     // 输出版本号，方便确认是否加载到最新代码
-    console.log('[记账App] 版本 v39 | ' + new Date().toISOString());
+    console.log('[记账App] 版本 v40 | ' + new Date().toISOString());
     // 拼接固定显示的 GitHub Token
     (function(){
         var p1 = document.getElementById('tkPt1');
