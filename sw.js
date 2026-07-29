@@ -1,5 +1,5 @@
-// Service Worker - PWA 离线缓存（v15：v34紧急恢复+默认账号保险）
-const CACHE_NAME = 'jizhang-v19';
+// Service Worker - PWA 离线缓存（v16：修复登录账号不显示 + SW缓存刷新）
+const CACHE_NAME = 'jizhang-v20';
 const FILES_TO_CACHE = [
   '.',
   'index.html',
@@ -17,12 +17,12 @@ self.addEventListener('install', (event) => {
   );
 });
 
-// 激活时清理所有旧版本缓存
+// 激活时只清理旧版本缓存（保留当前版本）
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then((keys) => {
       return Promise.all(
-        keys.map((key) => caches.delete(key))
+        keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key))
       );
     })
   );
@@ -43,7 +43,7 @@ self.addEventListener('fetch', (event) => {
 
   const url = new URL(event.request.url);
   // 核心文件（HTML/JS/CSS/manifest）使用网络优先，保证代码更新后能立即生效；离线时回退缓存
-  const isCore = /\/(app\.js|index\.html|style\.css|manifest\.json|)$/.test(url.pathname);
+  const isCore = /\/(app\.js|index\.html|style\.css|manifest\.json)$/.test(url.pathname);
 
   if (isCore) {
     event.respondWith(
