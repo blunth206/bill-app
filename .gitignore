@@ -1,0 +1,10 @@
+node_modules/
+*.bak.*
+_deploy_temp/
+数据备份/
+_test_*.js
+package-lock.json
+.codebuddy/
+.playwright-cli/
+.DS_Store
+Thumbs.db
