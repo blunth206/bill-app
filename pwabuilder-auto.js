@@ -1,7 +1,7 @@
 // pwabuilder-auto.js - 自动化 PWABuilder 生成 APK
 const { chromium } = require('playwright');
 
-const PWA_URL = 'https://mynotes-dp0d3o9jw5yd.edgeone.cool?eo_token=d1028775fbebe781eacad9e0788c0734&eo_time=1784333182';
+const PWA_URL = 'https://blunth206.github.io/bill-app/';
 const OUTPUT_DIR = __dirname;
 
 (async () => {
