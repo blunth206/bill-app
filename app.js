@@ -185,6 +185,7 @@ function syncPush(retryCount) {
         }),
         billUsers: APP_DATA.billUsers,
         bills: APP_DATA.bills,
+        deletedBills: JSON.parse(JSON.stringify(_deletedBills)), // 跨设备删除传播
         updatedAt: new Date().toISOString()
     };
     var content = JSON.stringify(syncData);
@@ -370,18 +371,26 @@ function syncPull() {
                 mergeBillByFields(billMap[cb.id], cb);
             }
         });
-        // 跨设备删除检测：本地有但云端无 → 若云端更新时间晚于账单 → 被其他设备删除
-        var cloudUpdatedAt = cloudData.updatedAt || '';
+        // 跨设备删除检测：云端明确记录的deletedBills（有设备显式删除了该账单）
+        var cloudDeletedBills = cloudData.deletedBills || {};
         var crossRemoved = 0;
-        if (cloudUpdatedAt) {
-            Object.keys(billMap).forEach(function(bid) {
-                if (!cloudBillIds[bid]) {
-                    var lb = billMap[bid];
-                    if (cloudUpdatedAt > (lb.updatedAt || '')) {
-                        delete billMap[bid];
+        if (cloudDeletedBills && typeof cloudDeletedBills === 'object') {
+            Object.keys(cloudDeletedBills).forEach(function(delId) {
+                if (billMap[delId]) {
+                    var localBill = billMap[delId];
+                    var cloudDelTime = cloudDeletedBills[delId];
+                    // 云端删除时间晚于本地账单更新时间 → 确认是其他设备删除了
+                    if (cloudDelTime > (localBill.updatedAt || '')) {
+                        delete billMap[delId];
                         crossRemoved++;
-                        console.log('[同步] 跨设备删除: ' + bid);
+                        console.log('[同步] 跨设备删除: ' + delId);
                     }
+                }
+            });
+            // 将云端的删除记录合并到本地，防止后续pull再拉回
+            Object.keys(cloudDeletedBills).forEach(function(delId) {
+                if (!_deletedBills[delId] || cloudDeletedBills[delId] > _deletedBills[delId]) {
+                    _deletedBills[delId] = cloudDeletedBills[delId];
                 }
             });
         }
@@ -5963,7 +5972,7 @@ function init() {
 // 页面加载完成后初始化
 document.addEventListener('DOMContentLoaded', function() {
     // 输出版本号，方便确认是否加载到最新代码
-    console.log('[记账App] 版本 v40 | ' + new Date().toISOString());
+    console.log('[记账App] 版本 v41 | ' + new Date().toISOString());
     // 拼接固定显示的 GitHub Token
     (function(){
         var p1 = document.getElementById('tkPt1');
