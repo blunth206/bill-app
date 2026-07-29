@@ -104,6 +104,8 @@ var _IS_SYNCING = false;
 var _LAST_SYNC_HASH = '';
 var _SYNC_REPO = 'blunth206/bill-app';
 var _SYNC_PATH = '/repos/' + _SYNC_REPO + '/contents/sync-data.json';
+// 最近删除的账单ID及删除时间，防止同步时从云端拉回已删数据
+var _deletedBills = {}; // { billId: ISO_timestamp }
 
 function initCloudSync() {
     return _IDB.getItem('billApp_syncToken').then(function(saved) {
@@ -202,6 +204,8 @@ function syncPush(retryCount) {
         }
         _LAST_SYNC_HASH = hash;
         _lastKnownBillCount = localBillCount;
+        _deletedBills = {};  // 推送成功，清除删除记录
+        _saveDeletedBills();
         updateSyncStatus('已同步');
         console.log('[同步] 推送成功! ' + localBillCount + '条账单');
         if (attempt > 0) showToast('云端同步成功', 'success');
@@ -277,6 +281,35 @@ function syncPushDebounced() {
     }, 1500);
 }
 
+// 强制推送（用于删除操作，不等待防抖，不因 _IS_SYNCING 静默跳过）
+function syncPushForce() {
+    if (!_SYNC_READY) return;
+    if (_IS_SYNCING) {
+        // 正在同步中，等2秒后重试
+        setTimeout(function() { syncPushForce(); }, 2000);
+        return;
+    }
+    syncPush();
+}
+
+// 清理超过1小时的删除记录
+function _cleanDeletedBills() {
+    var oneHourAgo = new Date(Date.now() - 3600000).toISOString();
+    var changed = false;
+    Object.keys(_deletedBills).forEach(function(id) {
+        if (_deletedBills[id] < oneHourAgo) {
+            delete _deletedBills[id];
+            changed = true;
+        }
+    });
+    if (changed) _saveDeletedBills();
+}
+
+// 持久化 _deletedBills
+function _saveDeletedBills() {
+    _IDB.setItem('billApp_deletedBills', JSON.stringify(_deletedBills)).catch(function() {});
+}
+
 function syncPull() {
     if (!_SYNC_READY || _IS_SYNCING) {
         console.log('[同步] 拉取跳过 READY=' + _SYNC_READY + ' SYNCING=' + _IS_SYNCING);
@@ -306,6 +339,17 @@ function syncPull() {
         APP_DATA.bills.forEach(function(b) { billMap[b.id] = b; });
         (cloudData.bills || []).forEach(function(cb) {
             if (!billMap[cb.id]) {
+                // 检查是否本地刚删除了此账单（删除时间晚于云端更新时间 → 保留删除）
+                var deletedAt = _deletedBills[cb.id];
+                if (deletedAt) {
+                    var cloudUpdated = cb.updatedAt || '';
+                    if (deletedAt > cloudUpdated) {
+                        console.log('[同步] 拉取: 跳过已删除的账单 ' + cb.id);
+                        return; // 不拉回
+                    }
+                    // 删除记录太老或云端更新晚，移除删除记录并正常合并
+                    delete _deletedBills[cb.id];
+                }
                 billMap[cb.id] = cb;
             } else {
                 mergeBillByFields(billMap[cb.id], cb);
@@ -371,6 +415,7 @@ function startPolling() {
     stopPolling();
     _SYNC_TIMER = setInterval(function() {
         if (_SYNC_READY && APP_DATA.currentAccountId) {
+            _cleanDeletedBills();
             syncPull();
         }
     }, 30000);
@@ -1452,8 +1497,13 @@ function saveEditBill() {
 // ==================== 删除账单 ====================
 function deleteBill(billId) {
     if (!confirm('确定要删除这条账单吗？此操作不可恢复。')) return;
+    // 记录删除时间，用于防止同步拉回
+    _deletedBills[billId] = new Date().toISOString();
+    _saveDeletedBills();
     APP_DATA.bills = APP_DATA.bills.filter(function(b) { return b.id !== billId; });
     saveData();
+    // 立即强制推送，确保删除操作同步到云端
+    syncPushForce();
     renderHomeView();
     showToast('账单已删除', 'success');
 }
@@ -1861,8 +1911,13 @@ function confirmBatchAction() {
 
     if (batchMode === 'delete') {
         if (!confirm('确定要删除选中的 ' + selectedBillIds.length + ' 条账单吗？此操作不可恢复。')) return;
+        // 记录所有删除ID
+        var now = new Date().toISOString();
+        selectedBillIds.forEach(function(id) { _deletedBills[id] = now; });
+        _saveDeletedBills();
         APP_DATA.bills = APP_DATA.bills.filter(function(b) { return selectedBillIds.indexOf(b.id) === -1; });
         saveData();
+        syncPushForce();
         cancelBatchAction();
         renderHomeView();
         showToast('已删除 ' + selectedBillIds.length + ' 条账单', 'success');
@@ -5824,6 +5879,12 @@ function init() {
             loadData(),
             _IDB.getItem('billApp_lastAccount').then(function(v) { _CACHE.lastAcct = v; }),
             _IDB.getItem('billApp_savedCred').then(function(v) { _CACHE.cred = v; }),
+            _IDB.getItem('billApp_deletedBills').then(function(v) {
+                if (v) {
+                    try { _deletedBills = typeof v === 'string' ? JSON.parse(v) : v; } catch(e) {}
+                    _cleanDeletedBills();
+                }
+            }).catch(function() {}),
         ]);
     }).then(function() {
         // 预加载列宽缓存
@@ -5861,7 +5922,7 @@ function init() {
 // 页面加载完成后初始化
 document.addEventListener('DOMContentLoaded', function() {
     // 输出版本号，方便确认是否加载到最新代码
-    console.log('[记账App] 版本 v36 | ' + new Date().toISOString());
+    console.log('[记账App] 版本 v37 | ' + new Date().toISOString());
     // 拼接固定显示的 GitHub Token
     (function(){
         var p1 = document.getElementById('tkPt1');
