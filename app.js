@@ -1493,6 +1493,22 @@ function toggleExportMenu() {
     if (!menu) return;
     _exportDropdownOpen = !_exportDropdownOpen;
     menu.style.display = _exportDropdownOpen ? 'block' : 'none';
+
+    // 自动填入账单的日期范围
+    if (_exportDropdownOpen && APP_DATA.bills && APP_DATA.bills.length > 0) {
+        var dates = APP_DATA.bills.map(function(b) { return b.date; }).filter(Boolean).sort();
+        var minDate = dates[0];
+        var maxDate = dates[dates.length - 1];
+        // 两个导出下拉的日期输入框
+        var from1 = document.getElementById('exportDateFrom');
+        var to1 = document.getElementById('exportDateTo');
+        var from2 = document.getElementById('exportDateFrom2');
+        var to2 = document.getElementById('exportDateTo2');
+        if (from1 && !from1.value) from1.value = minDate;
+        if (to1 && !to1.value) to1.value = maxDate;
+        if (from2 && !from2.value) from2.value = minDate;
+        if (to2 && !to2.value) to2.value = maxDate;
+    }
 }
 
 function closeExportMenu(e) {
@@ -5845,7 +5861,7 @@ function init() {
 // 页面加载完成后初始化
 document.addEventListener('DOMContentLoaded', function() {
     // 输出版本号，方便确认是否加载到最新代码
-    console.log('[记账App] 版本 v35 | ' + new Date().toISOString());
+    console.log('[记账App] 版本 v36 | ' + new Date().toISOString());
     // 拼接固定显示的 GitHub Token
     (function(){
         var p1 = document.getElementById('tkPt1');

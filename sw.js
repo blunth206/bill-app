@@ -1,5 +1,5 @@
-// Service Worker - PWA 离线缓存（v16：修复登录账号不显示 + SW缓存刷新）
-const CACHE_NAME = 'jizhang-v20';
+// Service Worker - PWA 离线缓存（v17：导出日期自动填充 + 版本v36）
+const CACHE_NAME = 'jizhang-v21';
 const FILES_TO_CACHE = [
   '.',
   'index.html',
