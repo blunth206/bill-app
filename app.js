@@ -292,16 +292,29 @@ function syncPushForce() {
     syncPush();
 }
 
-// 清理超过1小时的删除记录
+// 清理删除记录（仅作为安全保障，正常情况下由 push/pull 成功后清理）
 function _cleanDeletedBills() {
-    var oneHourAgo = new Date(Date.now() - 3600000).toISOString();
     var changed = false;
-    Object.keys(_deletedBills).forEach(function(id) {
-        if (_deletedBills[id] < oneHourAgo) {
+    var keys = Object.keys(_deletedBills);
+    // 超过7天未确认的删除记录 → 视为废弃，清理
+    var sevenDaysAgo = new Date(Date.now() - 7 * 86400000).toISOString();
+    keys.forEach(function(id) {
+        if (_deletedBills[id] < sevenDaysAgo) {
             delete _deletedBills[id];
             changed = true;
         }
     });
+    // 保护性上限：防止内存/存储无限增长
+    if (keys.length > 500) {
+        // 保留最新的500条
+        var sorted = keys.sort(function(a, b) {
+            return _deletedBills[a] < _deletedBills[b] ? 1 : -1;
+        });
+        sorted.slice(500).forEach(function(id) {
+            delete _deletedBills[id];
+            changed = true;
+        });
+    }
     if (changed) _saveDeletedBills();
 }
 
@@ -356,6 +369,19 @@ function syncPull() {
             }
         });
         APP_DATA.bills = Object.values(billMap);
+        // 清理已确认的删除记录：云端已不存在的账单 → 删除追踪可安全清除
+        var cloudBillIds = {};
+        (cloudData.bills || []).forEach(function(cb) { cloudBillIds[cb.id] = true; });
+        var cleanedDeleted = false;
+        Object.keys(_deletedBills).forEach(function(delId) {
+            if (!cloudBillIds[delId]) {
+                // 云端已不存在此账单 → 删除已被确认
+                delete _deletedBills[delId];
+                cleanedDeleted = true;
+                console.log('[同步] 删除已确认: ' + delId);
+            }
+        });
+        if (cleanedDeleted) _saveDeletedBills();
         // 合并账号
         var localAccMap = {};
         APP_DATA.accounts.forEach(function(a) { localAccMap[a.id] = a; });
@@ -415,7 +441,6 @@ function startPolling() {
     stopPolling();
     _SYNC_TIMER = setInterval(function() {
         if (_SYNC_READY && APP_DATA.currentAccountId) {
-            _cleanDeletedBills();
             syncPull();
         }
     }, 30000);
@@ -5922,7 +5947,7 @@ function init() {
 // 页面加载完成后初始化
 document.addEventListener('DOMContentLoaded', function() {
     // 输出版本号，方便确认是否加载到最新代码
-    console.log('[记账App] 版本 v38 | ' + new Date().toISOString());
+    console.log('[记账App] 版本 v39 | ' + new Date().toISOString());
     // 拼接固定显示的 GitHub Token
     (function(){
         var p1 = document.getElementById('tkPt1');
