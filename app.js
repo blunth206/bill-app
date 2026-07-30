@@ -1851,7 +1851,18 @@ function exportAsImage(downloadOnly) {
     container.innerHTML = html;
     document.body.appendChild(container);
 
-    // 使用 html2canvas 截图
+    // 移动端改用纯Canvas绘制（html2canvas在TWA WebView上极易OOM崩溃）
+    var isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || window.innerWidth < 768;
+    
+    if (isMobile) {
+        // 纯Canvas 2D绘制，内存安全
+        setTimeout(function() {
+            exportAsImageCanvas(container, bills, pageTitle, yearIncome, yearExpense, yearTotalBalance, totalIncome, totalExpense, balance, document.body.removeChild.bind(document.body, container), downloadOnly);
+        }, 100);
+        return;
+    }
+
+    // 桌面端仍使用html2canvas
     setTimeout(function() {
         if (typeof html2canvas === 'undefined') {
             document.body.removeChild(container);
@@ -1860,17 +1871,15 @@ function exportAsImage(downloadOnly) {
         }
         html2canvas(container, {
             backgroundColor: '#ffffff',
-            scale: 2,  // 2倍清晰度
+            scale: 2,
             useCORS: true,
             logging: false
         }).then(function(canvas) {
             document.body.removeChild(container);
             if (downloadOnly) {
-                // 直接下载模式（手机端或无剪贴板支持的场景）
                 downloadImage(canvas, pageTitle);
                 return;
             }
-            // 复制图片到剪贴板，方便粘贴分享（微信等）
             canvas.toBlob(function(blob) {
                 try {
                     navigator.clipboard.write([
@@ -1878,11 +1887,9 @@ function exportAsImage(downloadOnly) {
                     ]).then(function() {
                         showToast('图片已复制，可直接粘贴到微信分享', 'success');
                     }).catch(function() {
-                        // 剪贴板 API 失败，降级为下载
                         downloadImage(canvas, pageTitle);
                     });
                 } catch(e) {
-                    // 浏览器不支持 ClipboardItem，降级为下载
                     downloadImage(canvas, pageTitle);
                 }
             }, 'image/png');
@@ -1891,6 +1898,220 @@ function exportAsImage(downloadOnly) {
             showToast('图片生成失败：' + err.message, 'error');
         });
     }, 100);
+}
+
+// 纯Canvas 2D绘制导出图片（TWA/移动端专用，不依赖html2canvas）
+function exportAsImageCanvas(container, bills, pageTitle, yearIncome, yearExpense, yearTotalBalance, totalIncome, totalExpense, balance, cleanup, downloadOnly) {
+    var W = 720;
+    var PAD = 20;
+    var x = PAD, y = PAD;
+    var contentW = W - PAD * 2;
+
+    // 预计算高度
+    var headerH = 80;   // 标题区域
+    var summaryH = 100; // 汇总卡片
+    var filterH = 0;    // 筛选行
+    if (yearTotalBalance !== balance || yearIncome !== totalIncome || yearExpense !== totalExpense) {
+        filterH = 30;
+    }
+    var tableHeaderH = 36;
+    var rowH = 36;
+    var tableH = tableHeaderH + bills.length * rowH;
+    var footerH = 40;
+    var totalH = headerH + summaryH + filterH + tableH + footerH + PAD * 2;
+
+    var canvas = document.createElement('canvas');
+    canvas.width = W;
+    canvas.height = Math.max(totalH, 100);
+    var ctx = canvas.getContext('2d');
+
+    // 白色背景
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, W, canvas.height);
+
+    y = PAD;
+
+    // ---- 标题 ----
+    ctx.fillStyle = '#4A90D9';
+    ctx.font = 'bold 26px "Microsoft YaHei","PingFang SC",sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(pageTitle, W / 2, y + 28);
+    y += 40;
+
+    // 日期范围
+    var dateRangeStr = '';
+    if (bills.length > 0) {
+        dateRangeStr = '日期范围：' + bills[bills.length - 1].date + ' ~ ' + bills[0].date;
+    }
+    ctx.fillStyle = '#666';
+    ctx.font = '16px "Microsoft YaHei","PingFang SC",sans-serif';
+    ctx.fillText(dateRangeStr || ' ', W / 2, y + 20);
+    y += 32;
+
+    // 分隔线
+    ctx.strokeStyle = '#4A90D9';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(PAD, y);
+    ctx.lineTo(W - PAD, y);
+    ctx.stroke();
+    y += 24;
+
+    // ---- 汇总卡片 ----
+    var cardW = Math.floor(contentW / 3) - 8;
+    var cardX = [PAD, PAD + cardW + 12, PAD + (cardW + 12) * 2];
+    var cardData = [
+        { label: '收入（当年）', value: yearIncome, color: '#00b894' },
+        { label: '支出（当年）', value: yearExpense, color: '#e17055' },
+        { label: '总结余（当年）', value: yearTotalBalance, color: yearTotalBalance >= 0 ? '#00b894' : '#e17055' }
+    ];
+    var cardTop = y;
+    cardData.forEach(function(cd, i) {
+        var cx = cardX[i];
+        // 卡片背景
+        var grd = ctx.createLinearGradient(cx, y, cx, y + 80);
+        if (i === 0) { grd.addColorStop(0, '#e8f5e9'); grd.addColorStop(1, '#f1f8e9'); }
+        else if (i === 1) { grd.addColorStop(0, '#fff3e0'); grd.addColorStop(1, '#fce4ec'); }
+        else { grd.addColorStop(0, '#e3f2fd'); grd.addColorStop(1, '#e8eaf6'); }
+        ctx.fillStyle = grd;
+        roundRect(ctx, cx, y, cardW, 80, 10);
+        ctx.fill();
+        // 标签
+        ctx.fillStyle = '#666';
+        ctx.font = '12px "Microsoft YaHei","PingFang SC",sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(cd.label, cx + cardW / 2, y + 28);
+        // 金额
+        ctx.fillStyle = cd.color;
+        ctx.font = 'bold 24px "Microsoft YaHei","PingFang SC",sans-serif';
+        ctx.fillText('¥' + cd.value.toFixed(2), cx + cardW / 2, y + 62);
+    });
+    y += 92;
+
+    // 筛选行
+    if (filterH > 0) {
+        ctx.fillStyle = '#888';
+        ctx.font = '12px "Microsoft YaHei","PingFang SC",sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('筛选结果：收入 ¥' + totalIncome.toFixed(2) + ' · 支出 ¥' + totalExpense.toFixed(2) + ' · 结余 ¥' + balance.toFixed(2), W / 2, y + 18);
+        y += filterH;
+    }
+
+    // ---- 表格 ----
+    var colX = [PAD, PAD + 120, PAD + 200, PAD + 340, W - PAD];
+    var colW = [0, 120, 80, 140, colX[4] - colX[3]];
+    var headers = ['日期', '类型', '金额', '备注'];
+    var hAligns = ['center', 'center', 'right', 'left'];
+    var hColX = [colX[0], colX[1], colX[2], colX[3]];
+
+    // 表头背景
+    ctx.fillStyle = '#4A90D9';
+    ctx.fillRect(PAD, y, contentW, tableHeaderH);
+    // 表头文字
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 14px "Microsoft YaHei","PingFang SC",sans-serif';
+    headers.forEach(function(hdr, i) {
+        var alignX;
+        if (hAligns[i] === 'center') { ctx.textAlign = 'center'; alignX = hColX[i] + colW[i] / 2; }
+        else if (hAligns[i] === 'right') { ctx.textAlign = 'right'; alignX = hColX[i] + colW[i] - 8; }
+        else { ctx.textAlign = 'left'; alignX = hColX[i] + 8; }
+        ctx.fillText(hdr, alignX, y + 25);
+    });
+    y += tableHeaderH;
+
+    // 表体
+    bills.forEach(function(b, idx) {
+        var rowY = y + idx * rowH;
+        // 斑马纹背景
+        ctx.fillStyle = idx % 2 === 0 ? '#fafafa' : '#ffffff';
+        ctx.fillRect(PAD, rowY, contentW, rowH);
+        // 列边框
+        ctx.strokeStyle = '#e0e0e0';
+        ctx.lineWidth = 0.5;
+        [colX[1], colX[2], colX[3], colX[4]].forEach(function(cx) {
+            ctx.beginPath();
+            ctx.moveTo(cx, rowY);
+            ctx.lineTo(cx, rowY + rowH);
+            ctx.stroke();
+        });
+        // 底部边框
+        ctx.beginPath();
+        ctx.moveTo(PAD, rowY + rowH);
+        ctx.lineTo(colX[4], rowY + rowH);
+        ctx.stroke();
+
+        // 日期
+        ctx.fillStyle = '#333';
+        ctx.font = '13px "Microsoft YaHei","PingFang SC",sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(b.date, colX[0] + colW[1] / 2, rowY + 25);
+
+        // 类型
+        var tc = b.type === '收入' ? '#00b894' : (b.type === '结余' ? '#4A90D9' : '#e17055');
+        ctx.fillStyle = tc;
+        ctx.fillText(b.type, colX[1] + colW[2] / 2, rowY + 25);
+
+        // 金额
+        ctx.fillStyle = tc;
+        ctx.textAlign = 'right';
+        ctx.fillText('¥' + (b.amount || 0).toFixed(2), colX[3] - 8, rowY + 25);
+
+        // 备注（截断超长文本）
+        ctx.fillStyle = '#333';
+        ctx.textAlign = 'left';
+        var note = (b.note || '-').replace(/\n/g, ' ');
+        if (note.length > 16) note = note.substring(0, 15) + '…';
+        ctx.fillText(note, colX[3] + 8, rowY + 25);
+    });
+    y += tableH + 16;
+
+    // 底部外框线
+    ctx.strokeStyle = '#e0e0e0';
+    ctx.lineWidth = 0.5;
+    ctx.beginPath();
+    ctx.moveTo(PAD, y - 16 - tableH);
+    ctx.lineTo(PAD, y - 16);
+    ctx.lineTo(colX[4], y - 16);
+    ctx.lineTo(colX[4], y - 16 - tableH);
+    ctx.stroke();
+
+    // 页脚
+    ctx.fillStyle = '#bbb';
+    ctx.font = '11px "Microsoft YaHei","PingFang SC",sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('共 ' + bills.length + ' 条记录', W / 2, y + 14);
+
+    // 清理DOM容器
+    cleanup();
+
+    // 下载
+    canvas.toBlob(function(blob) {
+        if (!blob) { showToast('图片生成失败', 'error'); return; }
+        var url = URL.createObjectURL(blob);
+        var link = document.createElement('a');
+        link.download = (pageTitle || '账单') + '_' + new Date().toISOString().split('T')[0] + '.png';
+        link.href = url;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        setTimeout(function() { URL.revokeObjectURL(url); }, 2000);
+        showToast('图片已下载', 'success');
+    }, 'image/png', 0.92);
+}
+
+// 辅助：圆角矩形
+function roundRect(ctx, x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + w - r, y);
+    ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+    ctx.lineTo(x + w, y + h - r);
+    ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+    ctx.lineTo(x + r, y + h);
+    ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+    ctx.lineTo(x, y + r);
+    ctx.quadraticCurveTo(x, y, x + r, y);
+    ctx.closePath();
 }
 
 // 下载图片（使用 toBlob 避免 toDataURL 的 base64 大字符串导致 WebView OOM 崩溃）
@@ -6073,7 +6294,7 @@ function init() {
 // 页面加载完成后初始化
 document.addEventListener('DOMContentLoaded', function() {
     // 输出版本号，方便确认是否加载到最新代码
-    console.log('[记账App] 版本 v48 | ' + new Date().toISOString());
+    console.log('[记账App] 版本 v49 | ' + new Date().toISOString());
     // 拼接固定显示的 GitHub Token
     (function(){
         var p1 = document.getElementById('tkPt1');
