@@ -439,6 +439,8 @@ function syncPull() {
             }
         });
         APP_DATA.billUsers = Object.values(localUserMap);
+        // 去重：同名账单户清理多设备同步产生的重复
+        dedupBillUsers();
         _LAST_SYNC_HASH = hash;
         saveDataSilent();
         var newBills = APP_DATA.bills.length;
@@ -646,8 +648,9 @@ function loadData() {
     }).catch(function(e) {
         console.error('数据加载失败', e);
     }).then(function() {
-        // 先清理历史遗留的重复账号
+        // 先清理历史遗留的重复账号和重复账单户
         dedupAccounts();
+        dedupBillUsers();
         // 确保至少有默认管理员账号（使用固定ID避免同步时重复）
         if (APP_DATA.accounts.length === 0) {
             APP_DATA.accounts.push({
@@ -2432,6 +2435,54 @@ function dedupAccounts() {
     return unique.length;
 }
 
+// 去重：同名账单户保留最早创建的，清理多设备同步产生的重复
+function dedupBillUsers() {
+    var before = APP_DATA.billUsers.length;
+    var nameMap = {}; // name → {keep: 最早的用户, removeIds: [被删除的ID列表]}
+    
+    APP_DATA.billUsers.forEach(function(u) {
+        if (!nameMap[u.name]) {
+            nameMap[u.name] = { keep: u, removeIds: [] };
+        } else {
+            var exist = nameMap[u.name];
+            // 保留创建更早的那个
+            if ((u.createdAt || '') < (exist.keep.createdAt || '')) {
+                exist.removeIds.push(exist.keep.id);
+                exist.keep = u;
+            } else {
+                exist.removeIds.push(u.id);
+            }
+        }
+    });
+    
+    var removeIds = [];
+    Object.values(nameMap).forEach(function(item) {
+        removeIds = removeIds.concat(item.removeIds);
+    });
+    
+    if (removeIds.length > 0) {
+        // 把被删用户名下的账单迁到保留用户名下
+        Object.values(nameMap).forEach(function(item) {
+            if (item.removeIds.length > 0) {
+                item.removeIds.forEach(function(rid) {
+                    APP_DATA.bills.forEach(function(b) {
+                        if (b.userId === rid) b.userId = item.keep.id;
+                    });
+                });
+            }
+        });
+        
+        // 过滤掉重复用户
+        var removeSet = {};
+        removeIds.forEach(function(id) { removeSet[id] = true; });
+        APP_DATA.billUsers = APP_DATA.billUsers.filter(function(u) { return !removeSet[u.id]; });
+        
+        saveData();
+        console.log('[数据] ✅ 账单户去重: ' + before + '→' + APP_DATA.billUsers.length + ' (清理了' + (before - APP_DATA.billUsers.length) + '个重复, 账单已迁移)');
+    }
+    return APP_DATA.billUsers.length;
+}
+
 function deleteAccount(accountId) {
     var acc = APP_DATA.accounts.find(function(a) { return a.id === accountId; });
     if (!acc) return;
@@ -2446,6 +2497,7 @@ function deleteAccount(accountId) {
 
 // 账单户管理
 function renderBillUserGrid() {
+    dedupBillUsers();  // 打开管理页时即时去重
     var grid = document.getElementById('billUserGrid');
     var empty = document.getElementById('billUserEmpty');
     if (APP_DATA.billUsers.length === 0) {
@@ -6021,7 +6073,7 @@ function init() {
 // 页面加载完成后初始化
 document.addEventListener('DOMContentLoaded', function() {
     // 输出版本号，方便确认是否加载到最新代码
-    console.log('[记账App] 版本 v47 | ' + new Date().toISOString());
+    console.log('[记账App] 版本 v48 | ' + new Date().toISOString());
     // 拼接固定显示的 GitHub Token
     (function(){
         var p1 = document.getElementById('tkPt1');
