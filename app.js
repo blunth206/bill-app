@@ -1606,10 +1606,12 @@ function toggleExportMenu() {
         if (newestCreatedAt) {
             // 取最近录入日期当天的所有账单，用它们的日期范围
             var newestDay = new Date(newestCreatedAt);
-            var dayStart = new Date(newestDay.getFullYear(), newestDay.getMonth(), newestDay.getDate()).toISOString();
-            var dayEnd = new Date(newestDay.getFullYear(), newestDay.getMonth(), newestDay.getDate() + 1).toISOString();
+            var dayStart = new Date(newestDay.getFullYear(), newestDay.getMonth(), newestDay.getDate()).getTime();
+            var dayEnd = new Date(newestDay.getFullYear(), newestDay.getMonth(), newestDay.getDate() + 1).getTime();
             var recentBills = APP_DATA.bills.filter(function(b) {
-                var c = b.createdAt || '';
+                var c = b.createdAt;
+                if (typeof c === 'string') c = new Date(c).getTime();
+                if (!c) return false;
                 return c >= dayStart && c < dayEnd;
             });
             if (recentBills.length > 0) {
@@ -6019,7 +6021,7 @@ function init() {
 // 页面加载完成后初始化
 document.addEventListener('DOMContentLoaded', function() {
     // 输出版本号，方便确认是否加载到最新代码
-    console.log('[记账App] 版本 v45 | ' + new Date().toISOString());
+    console.log('[记账App] 版本 v46 | ' + new Date().toISOString());
     // 拼接固定显示的 GitHub Token
     (function(){
         var p1 = document.getElementById('tkPt1');
