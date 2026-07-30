@@ -1594,11 +1594,38 @@ function toggleExportMenu() {
     _exportDropdownOpen = !_exportDropdownOpen;
     menu.style.display = _exportDropdownOpen ? 'block' : 'none';
 
-    // 自动填入账单的日期范围
+    // 自动填入账单的日期范围（取最近录入日期的账单范围，而非全部历史）
     if (_exportDropdownOpen && APP_DATA.bills && APP_DATA.bills.length > 0) {
-        var dates = APP_DATA.bills.map(function(b) { return b.date; }).filter(Boolean).sort();
-        var minDate = dates[0];
-        var maxDate = dates[dates.length - 1];
+        var today = new Date();
+        // 找到最近一次录入的日期（按 createdAt）
+        var newestCreatedAt = '';
+        APP_DATA.bills.forEach(function(b) {
+            if ((b.createdAt || '') > newestCreatedAt) newestCreatedAt = b.createdAt || '';
+        });
+        var minDate, maxDate;
+        if (newestCreatedAt) {
+            // 取最近录入日期当天的所有账单，用它们的日期范围
+            var newestDay = new Date(newestCreatedAt);
+            var dayStart = new Date(newestDay.getFullYear(), newestDay.getMonth(), newestDay.getDate()).toISOString();
+            var dayEnd = new Date(newestDay.getFullYear(), newestDay.getMonth(), newestDay.getDate() + 1).toISOString();
+            var recentBills = APP_DATA.bills.filter(function(b) {
+                var c = b.createdAt || '';
+                return c >= dayStart && c < dayEnd;
+            });
+            if (recentBills.length > 0) {
+                var dates = recentBills.map(function(b) { return b.date; }).filter(Boolean).sort();
+                minDate = dates[0];
+                maxDate = dates[dates.length - 1];
+            }
+        }
+        // 兜底：用全部历史范围
+        if (!minDate) {
+            var allDates = APP_DATA.bills.map(function(b) { return b.date; }).filter(Boolean).sort();
+            minDate = allDates[0];
+            maxDate = allDates[allDates.length - 1];
+        }
+        // 结束日期不超过今天
+        if (maxDate > today.toISOString().split('T')[0]) maxDate = today.toISOString().split('T')[0];
         // 两个导出下拉的日期输入框
         var from1 = document.getElementById('exportDateFrom');
         var to1 = document.getElementById('exportDateTo');
@@ -5992,7 +6019,7 @@ function init() {
 // 页面加载完成后初始化
 document.addEventListener('DOMContentLoaded', function() {
     // 输出版本号，方便确认是否加载到最新代码
-    console.log('[记账App] 版本 v44 | ' + new Date().toISOString());
+    console.log('[记账App] 版本 v45 | ' + new Date().toISOString());
     // 拼接固定显示的 GitHub Token
     (function(){
         var p1 = document.getElementById('tkPt1');
