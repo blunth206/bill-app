@@ -12,28 +12,48 @@
     <link rel="icon" type="image/png" href="favicon-32.png">
     <link rel="apple-touch-icon" href="apple-touch-icon.png">
     <link rel="stylesheet" href="style.css?v=34">
-    <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+    <!-- CDN 库异步加载，不阻塞页面渲染 -->
     <script>
-        if (typeof XLSX === 'undefined') {
-            document.write('<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"><\/script>');
-        }
-        if (typeof html2canvas === 'undefined') {
-            document.write('<script src="https://unpkg.com/html2canvas@1.4.1/dist/html2canvas.min.js"><\/script>');
-        }
-    </script>
-    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/crypto-js@4.2.0/crypto-js.min.js"></script>
-    <script>
-        // 备用CDN：如果jsdelivr加载失败，尝试unpkg
-        if (typeof Tesseract === 'undefined') {
-            var fallbackScript = document.createElement('script');
-            fallbackScript.src = 'https://unpkg.com/tesseract.js@5/dist/tesseract.min.js';
-            fallbackScript.onerror = function() {
-                console.warn('Tesseract.js 所有CDN加载失败，OCR功能不可用');
+    (function loadCdnLibs() {
+        // 记录已加载的库，供 app.js 判断功能可用性
+        window.__cdnReady = { xlsx: false, html2canvas: false, cryptoJs: false, tesseract: false };
+        var libs = [
+            { name: 'xlsx', urls: [
+                'https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js',
+                'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js'
+            ]},
+            { name: 'html2canvas', urls: [
+                'https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js',
+                'https://unpkg.com/html2canvas@1.4.1/dist/html2canvas.min.js'
+            ]},
+            { name: 'cryptoJs', urls: [
+                'https://cdn.jsdelivr.net/npm/crypto-js@4.2.0/crypto-js.min.js'
+            ]},
+            { name: 'tesseract', urls: [
+                'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js',
+                'https://unpkg.com/tesseract.js@5/dist/tesseract.min.js'
+            ]}
+        ];
+        function tryLoad(lib, idx) {
+            if (idx >= lib.urls.length) {
+                console.warn('[CDN] ' + lib.name + ' 所有源加载失败');
+                window.__cdnReady[lib.name] = false;
+                return;
+            }
+            var s = document.createElement('script');
+            s.src = lib.urls[idx];
+            s.async = true;
+            s.onload = function() {
+                window.__cdnReady[lib.name] = true;
+                console.log('[CDN] ' + lib.name + ' 加载成功: ' + lib.urls[idx]);
             };
-            document.head.appendChild(fallbackScript);
+            s.onerror = function() {
+                tryLoad(lib, idx + 1);
+            };
+            document.head.appendChild(s);
         }
+        libs.forEach(function(l) { tryLoad(l, 0); });
+    })();
     </script>
     <script>
         if ('serviceWorker' in navigator) { navigator.serviceWorker.register('sw.js?v=10').catch(() => {}); }
@@ -999,7 +1019,7 @@ async function handleRequest(request) {
     <!-- Toast 提示 -->
     <div class="toast" id="toast"></div>
 
-    <script src="app.js?v=42"></script>
+    <script src="app.js?v=43"></script>
     <script>
     (function(){
         function showForgot(){
