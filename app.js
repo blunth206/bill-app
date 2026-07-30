@@ -1861,13 +1861,33 @@ function exportAsImage(downloadOnly) {
     }, 100);
 }
 
-// 降级：当剪贴板 API 不可用时，下载图片
+// 下载图片（使用 toBlob 避免 toDataURL 的 base64 大字符串导致 WebView OOM 崩溃）
 function downloadImage(canvas, pageTitle) {
-    var link = document.createElement('a');
-    link.download = (pageTitle || '账单') + '_' + new Date().toISOString().split('T')[0] + '.png';
-    link.href = canvas.toDataURL('image/png');
-    link.click();
-    showToast('图片已下载（浏览器不支持直接复制图片）', 'info');
+    var fileName = (pageTitle || '账单') + '_' + new Date().toISOString().split('T')[0] + '.png';
+    // 优先使用 toBlob（二进制，内存友好），降级使用 toDataURL
+    if (canvas.toBlob) {
+        canvas.toBlob(function(blob) {
+            var url = URL.createObjectURL(blob);
+            var link = document.createElement('a');
+            link.download = fileName;
+            link.href = url;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            // 延迟释放 Blob URL，确保下载已触发
+            setTimeout(function() { URL.revokeObjectURL(url); }, 1000);
+            showToast('图片已下载', 'success');
+        }, 'image/png', 0.92);
+    } else {
+        // 极旧浏览器降级
+        var link = document.createElement('a');
+        link.download = fileName;
+        link.href = canvas.toDataURL('image/png');
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        showToast('图片已下载', 'info');
+    }
 }
 
 // 导出当前筛选账单（详情弹窗用）
@@ -5972,7 +5992,7 @@ function init() {
 // 页面加载完成后初始化
 document.addEventListener('DOMContentLoaded', function() {
     // 输出版本号，方便确认是否加载到最新代码
-    console.log('[记账App] 版本 v43 | ' + new Date().toISOString());
+    console.log('[记账App] 版本 v44 | ' + new Date().toISOString());
     // 拼接固定显示的 GitHub Token
     (function(){
         var p1 = document.getElementById('tkPt1');
