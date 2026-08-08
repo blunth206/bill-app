@@ -4853,8 +4853,8 @@ function getBaiduAccessToken() {
 function ocrBaidu(imageDataUrl) {
     var base64 = imageDataUrl.replace(/^data:image\/\w+;base64,/, '');
     return getBaiduAccessToken().then(function(token) {
-        var ocrUrl = 'https://aip.baidubce.com/rest/2.0/ocr/v1/general_basic?access_token=' + token;
-        var ocrBody = 'image=' + encodeURIComponent(base64) + '&language_type=CHN_ENG&detect_direction=true';
+        var ocrUrl = 'https://aip.baidubce.com/rest/2.0/ocr/v1/general_enhanced?access_token=' + token;
+        var ocrBody = 'image=' + encodeURIComponent(base64) + '&language_type=CHN_ENG&detect_direction=true&recognize_granularity=small';
         return _remoteFetchPOST(ocrUrl, { 'Content-Type': 'application/x-www-form-urlencoded' }, ocrBody);
     }).then(function(data) {
         if (data.error_code) {
