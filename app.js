@@ -484,7 +484,6 @@ function autoFillToken() {
     // Token 已内置，自动填入提示
     showToast('同步已自动配置（GitHub 内置 Token）', 'info');
 }
-}
 
 function _hashCode(str) {
     var hash = 0;
