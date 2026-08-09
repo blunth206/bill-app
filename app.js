@@ -487,6 +487,11 @@ function stopPolling() {
     if (_SYNC_TIMER) { clearInterval(_SYNC_TIMER); _SYNC_TIMER = null; }
 }
 
+// 兼容旧版（Service Worker 缓存的旧 index.html 可能调用这些函数）
+function saveGistToken() { return saveSyncUrl(); }
+function loadGistToken() { return; }
+function testGistToken() { return saveSyncUrl(); }
+
 // 设置页：保存 GitHub Token（存在 IndexedDB 本地，不提交到代码仓库）
 function saveSyncUrl() {
     var input = document.getElementById('syncTokenInput');
