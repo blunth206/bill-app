@@ -94,49 +94,48 @@ function _migrateFromLocalStorage() {
     });
 }
 
-// ==================== Cloudflare Worker 云同步层（KV 存储） ====================
-var _SYNC_URL = null;       // Worker 地址，如 https://bill-app-sync.xxx.workers.dev
-var _SYNC_READY = false;
+// ==================== GitHub 云同步层（repo 文件存储，Token 内置） ====================
+var _SYNC_TOKEN = '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';
+var _SYNC_SHA = null;       // 云端文件 SHA，用于更新
+var _SYNC_READY = true;     // Token 已内置，默认启用
 var _SYNC_TIMER = null;
 var _PUSH_TIMER = null;
 var _IS_SYNCING = false;
 var _LAST_SYNC_HASH = '';
+var _SYNC_REPO = 'blunth206/bill-app';
+var _SYNC_PATH = '/repos/' + _SYNC_REPO + '/contents/sync-data.json';
 // 最近删除的账单ID及删除时间，防止同步时从云端拉回已删数据
 var _deletedBills = {}; // { billId: ISO_timestamp }
 
 function initCloudSync() {
-    return _IDB.getItem('billApp_syncUrl').then(function(saved) {
-        _SYNC_URL = saved || null;
-        if (_SYNC_URL) {
-            _SYNC_READY = true;
-            console.log('云同步已启用:', _SYNC_URL);
-            updateSyncStatus('已连接');
-            startPolling();
-        } else {
-            updateSyncStatus('未配置');
-        }
-        var input = document.getElementById('syncUrlInput');
-        if (input && _SYNC_URL) input.value = _SYNC_URL;
-    }).catch(function() {
-        updateSyncStatus('未配置');
-    });
+    console.log('云同步已启用（内置 Token）');
+    updateSyncStatus('已连接');
+    startPolling();
 }
 
 function _apiFetch(method, path, body) {
-    if (!_SYNC_URL) return Promise.reject(new Error('未配置同步地址'));
-    var opts = { method: method, cache: 'no-store' };
+    var headers = {
+        'Authorization': 'token ' + _SYNC_TOKEN,
+        'Accept': 'application/vnd.github.v3+json'
+    };
+    var opts = { method: method, headers: headers, cache: 'no-store' };
     if (body) {
-        opts.headers = { 'Content-Type': 'application/json' };
+        headers['Content-Type'] = 'application/json';
         opts.body = JSON.stringify(body);
     }
-    var url = _SYNC_URL.replace(/\/$/, '') + path;
-    console.log('[同步] 请求:', method, url, body ? '(有body)' : '');
+    var url = 'https://api.github.com' + path;
+    console.log('[同步] API请求:', method, url, body ? '(有body)' : '');
     return fetch(url, opts).then(function(r) {
         if (!r.ok) {
+            if (r.status === 401 || r.status === 403) {
+                updateSyncStatus('Token无效');
+                _SYNC_READY = false;
+            }
+            if (r.status === 404) return null;
             return r.text().then(function(text) {
                 var detail = '';
-                try { var err = JSON.parse(text); if (err && err.error) detail = err.error; } catch(e) {}
-                console.error('[同步] 错误响应', r.status, text.substring(0, 400));
+                try { var err = JSON.parse(text); if (err && err.message) detail = err.message; } catch(e) {}
+                console.error('[同步] API错误响应', r.status, text.substring(0, 400));
                 throw new Error('API ' + r.status + (detail ? ': ' + detail : ''));
             });
         }
@@ -181,19 +180,23 @@ function syncPush(retryCount) {
     var hash = _hashCode(content);
     if (hash === _LAST_SYNC_HASH) { _IS_SYNCING = false; return Promise.resolve(); }
 
-    var body = { data: syncData };
+    var body = {
+        message: 'sync: ' + new Date().toLocaleString(),
+        content: btoa(unescape(encodeURIComponent(content)))
+    };
+    if (_SYNC_SHA) body.sha = _SYNC_SHA;
 
     console.log('[同步] 推送中... 账单' + localBillCount + '条, 尝试' + (attempt + 1) + '/' + (_PUSH_MAX_RETRY + 1));
-    return _apiFetch('POST', '/sync', body).then(function(r) {
-        if (r && r.ok) {
-            _LAST_SYNC_HASH = hash;
-            _lastKnownBillCount = localBillCount;
-            updateSyncStatus('已同步');
-            console.log('[同步] 推送成功! ' + localBillCount + '条账单');
-            if (attempt > 0) showToast('云端同步成功', 'success');
-            return r;
+    return _apiFetch('PUT', _SYNC_PATH, body).then(function(r) {
+        if (r && r.content && r.content.sha) {
+            _SYNC_SHA = r.content.sha;
         }
-        throw new Error('推送返回异常');
+        _LAST_SYNC_HASH = hash;
+        _lastKnownBillCount = localBillCount;
+        updateSyncStatus('已同步');
+        console.log('[同步] 推送成功! ' + localBillCount + '条账单');
+        if (attempt > 0) showToast('云端同步成功', 'success');
+        return r;
     }).catch(function(e) {
         // 只有 409 云端冲突才重试，且先拉取合并后再推送
         if (attempt < _PUSH_MAX_RETRY && e.message && e.message.indexOf('API 409') === 0) {
@@ -216,7 +219,7 @@ function syncPush(retryCount) {
 
 // 手动强制拉取（带反馈）
 function forceSyncDown() {
-    if (!_SYNC_READY) { showToast('请先配置同步地址', 'error'); return; }
+    if (!_SYNC_READY) { showToast('同步未启用', 'error'); return; }
     if (_IS_SYNCING) { showToast('同步进行中，请稍候', 'info'); return; }
     console.log('[同步] 手动拉取...');
     showToast('正在从云端拉取...', 'info');
@@ -236,14 +239,21 @@ function forceSyncDown() {
 
 // 手动强制推送（带反馈）
 function forceSyncUp() {
-    if (!_SYNC_READY) { showToast('请先配置同步地址', 'error'); return; }
+    if (!_SYNC_READY) { showToast('同步未启用', 'error'); return; }
     if (_IS_SYNCING) { showToast('同步进行中，请稍候', 'info'); return; }
     console.log('[同步] 手动推送... 本地账单' + APP_DATA.bills.length + '条');
     showToast('正在推送到云端...', 'info');
-    forceSyncPush().then(function() {
+    // 先获取最新SHA，再推送
+    _IS_SYNCING = true;
+    _apiFetch('GET', _SYNC_PATH).then(function(fileInfo) {
+        if (fileInfo && fileInfo.sha) _SYNC_SHA = fileInfo.sha;
+        _IS_SYNCING = false;
+        return forceSyncPush();
+    }).then(function() {
         console.log('[同步] 手动推送完成');
         showToast('已推送到云端 (' + APP_DATA.bills.length + '条)', 'success');
     }).catch(function(e) {
+        _IS_SYNCING = false;
         console.error('[同步] 手动推送失败:', e);
         showToast('推送失败: ' + (e.message || '网络错误'), 'error');
     });
@@ -312,23 +322,24 @@ function syncPull() {
         return Promise.resolve(false);
     }
     console.log('[同步] 拉取中...');
-    return _apiFetch('GET', '/sync').then(function(res) {
-        if (!res || !res.ok || !res.data) {
+    return _apiFetch('GET', _SYNC_PATH).then(function(fileInfo) {
+        if (!fileInfo || !fileInfo.content) {
             console.log('[同步] 拉取: 云端无数据');
             return false;
         }
-        var content = typeof res.data === 'string' ? res.data : JSON.stringify(res.data);
+        var content = decodeURIComponent(escape(atob(fileInfo.content.replace(/\s/g, ''))));
         var hash = _hashCode(content);
         if (hash === _LAST_SYNC_HASH) {
             console.log('[同步] 拉取: 无变化，跳过');
             return false;
         }
-        var cloudData = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
+        var cloudData = JSON.parse(content);
         if (!cloudData.bills) {
             console.log('[同步] 拉取: 云端无账单数据');
             return false;
         }
         var oldBills = APP_DATA.bills.length;
+        _SYNC_SHA = fileInfo.sha;
         // 字段级合并账单
         var billMap = {};
         APP_DATA.bills.forEach(function(b) { billMap[b.id] = b; });
@@ -463,49 +474,16 @@ function stopPolling() {
     if (_SYNC_TIMER) { clearInterval(_SYNC_TIMER); _SYNC_TIMER = null; }
 }
 
-// 设置页：保存同步地址
+// 设置页：云同步已内置，无需用户配置
 function saveSyncUrl() {
-    var input = document.getElementById('syncUrlInput');
-    var url = (input.value || '').trim();
-    if (!url) {
-        _SYNC_READY = false;
-        _SYNC_URL = null;
-        _LAST_SYNC_HASH = '';
-        _IDB.removeItem('billApp_syncUrl');
-        updateSyncStatus('未配置');
-        showToast('已清除云同步配置');
-        return;
-    }
-    if (!/^https?:\/\/.+/.test(url)) {
-        showToast('同步地址格式不正确，应以 https:// 开头', 'error');
-        return;
-    }
-    _SYNC_URL = url.replace(/\/$/, '');
-    _LAST_SYNC_HASH = '';
-    _IDB.setItem('billApp_syncUrl', _SYNC_URL);
-    updateSyncStatus('验证中...');
-    _apiFetch('GET', '/sync').then(function(res) {
-        _SYNC_READY = true;
-        console.log('同步地址有效');
-        updateSyncStatus('已连接');
-        startPolling();
-        showToast('云同步已启用！', 'success');
-        syncPush();
-        setTimeout(function() { syncPull(); }, 2000);
-    }).catch(function(err) {
-        _SYNC_READY = false;
-        _SYNC_URL = null;
-        var msg = (err && err.message) ? err.message : '未知错误';
-        updateSyncStatus('地址无效');
-        showToast('同步地址无效 (' + msg + ')，请检查后重试', 'error');
-    });
+    // Token 已内置，此函数保留但不需要用户操作
+    showToast('云同步已自动启用，无需手动配置', 'success');
 }
 
 function autoFillToken() {
-    var input = document.getElementById('syncUrlInput');
-    if (!input) return;
-    input.value = 'https://bill-app-sync.303979338.workers.dev';
-    showToast('已自动填入同步地址，点击「保存」验证', 'success');
+    // Token 已内置，自动填入提示
+    showToast('同步已自动配置（GitHub 内置 Token）', 'info');
+}
 }
 
 function _hashCode(str) {
