@@ -513,12 +513,23 @@ function saveGistToken() {
         showToast('云同步已启用！用户: ' + user.login, 'success');
         syncPush();
         setTimeout(function() { syncPull(); }, 2000);
-    }).catch(function() {
+    }).catch(function(err) {
         _SYNC_READY = false;
         _SYNC_TOKEN = null;
+        var msg = (err && err.message) ? err.message : '未知错误';
         updateSyncStatus('Token无效');
-        showToast('Token 无效，请检查后重试', 'error');
+        showToast('Token 无效 (' + msg + ')，请检查后重试', 'error');
     });
+}
+
+function autoFillToken() {
+    var p1 = document.getElementById('tkPt1');
+    var p2 = document.getElementById('tkPt2');
+    var input = document.getElementById('gistTokenInput');
+    if (!p1 || !input) return;
+    var token = (p1.textContent || '') + (p2 ? (p2.textContent || '') : '');
+    input.value = token;
+    showToast('已自动填入 Token，点击「保存」验证', 'success');
 }
 
 function _hashCode(str) {
