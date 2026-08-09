@@ -583,6 +583,10 @@ function mergeBillByFields(localBill, cloudBill) {
 
 function saveData() {
     var now = new Date().toISOString();
+    // 类型保护：确保都是数组，避免脏数据导致崩溃
+    if (!Array.isArray(APP_DATA.accounts)) APP_DATA.accounts = [];
+    if (!Array.isArray(APP_DATA.billUsers)) APP_DATA.billUsers = [];
+    if (!Array.isArray(APP_DATA.bills)) APP_DATA.bills = [];
     // 给所有记录自动加上更新时间戳（缺失时补充）
     APP_DATA.accounts.forEach(function(a) { if (!a.updatedAt) a.updatedAt = now; });
     APP_DATA.billUsers.forEach(function(u) { if (!u.updatedAt) u.updatedAt = now; });
@@ -605,9 +609,9 @@ function saveData() {
 function loadData() {
     return _IDB.getItem('billApp_data').then(function(data) {
         if (data) {
-            APP_DATA.accounts = data.accounts || [];
-            APP_DATA.billUsers = data.billUsers || [];
-            APP_DATA.bills = data.bills || [];
+            APP_DATA.accounts = Array.isArray(data.accounts) ? data.accounts : [];
+            APP_DATA.billUsers = Array.isArray(data.billUsers) ? data.billUsers : [];
+            APP_DATA.bills = Array.isArray(data.bills) ? data.bills : [];
         }
     }).catch(function(e) {
         console.error('数据加载失败', e);
@@ -769,6 +773,32 @@ function initLogin() {
             document.getElementById('loginPassword').focus();
         }
     }
+}
+
+// 紧急重置：清除本地 IndexedDB 坏数据并重建默认管理员账号
+function resetLocalData() {
+    if (!confirm('确定要重置本地数据吗？\n\n将清除 IndexedDB 中的账号/账单户/账单缓存，并重建默认管理员账号（密码 123456）。\n\n注意：云端同步数据不会被删除，重新登录后会自动重新拉取。')) {
+        return;
+    }
+    APP_DATA.accounts = [];
+    APP_DATA.billUsers = [];
+    APP_DATA.bills = [];
+    _IDB.removeItem('billApp_data').then(function() {
+        // 重建默认管理员
+        APP_DATA.accounts.push({
+            id: 'admin_default',
+            name: '管理员',
+            password: '123456',
+            role: 'admin',
+            createdAt: new Date().toISOString()
+        });
+        saveData();
+        initLogin();
+        showToast('本地数据已重置，已重建管理员账号', 'success');
+    }).catch(function(e) {
+        console.error('重置失败', e);
+        showToast('重置失败: ' + (e.message || e), 'error');
+    });
 }
 
 function doLogin(auto) {
