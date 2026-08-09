@@ -95,9 +95,9 @@ function _migrateFromLocalStorage() {
 }
 
 // ==================== GitHub 云同步层（repo 文件存储，Token 内置） ====================
-var _SYNC_TOKEN = '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';
+var _SYNC_TOKEN = null;   // 从 IndexedDB 读取，不写死在代码里
 var _SYNC_SHA = null;       // 云端文件 SHA，用于更新
-var _SYNC_READY = true;     // Token 已内置，默认启用
+var _SYNC_READY = false;    // 有 Token 才启用
 var _SYNC_TIMER = null;
 var _PUSH_TIMER = null;
 var _IS_SYNCING = false;
@@ -108,10 +108,22 @@ var _SYNC_PATH = '/repos/' + _SYNC_REPO + '/contents/sync-data.json';
 var _deletedBills = {}; // { billId: ISO_timestamp }
 
 function initCloudSync() {
-    console.log('云同步已启用（内置 Token）');
-    updateSyncStatus('已连接');
-    startPolling();
-    return Promise.resolve();
+    return _IDB.getItem('billApp_syncToken').then(function(saved) {
+        if (saved) {
+            _SYNC_TOKEN = saved;
+            _SYNC_READY = true;
+            updateSyncStatus('已连接');
+            startPolling();
+        } else {
+            _SYNC_READY = false;
+            updateSyncStatus('未配置');
+        }
+        var input = document.getElementById('syncTokenInput');
+        if (input && saved) input.value = saved;
+    }).catch(function() {
+        _SYNC_READY = false;
+        updateSyncStatus('未配置');
+    });
 }
 
 function _apiFetch(method, path, body) {
@@ -475,15 +487,64 @@ function stopPolling() {
     if (_SYNC_TIMER) { clearInterval(_SYNC_TIMER); _SYNC_TIMER = null; }
 }
 
-// 设置页：云同步已内置，无需用户配置
+// 设置页：保存 GitHub Token（存在 IndexedDB 本地，不提交到代码仓库）
 function saveSyncUrl() {
-    // Token 已内置，此函数保留但不需要用户操作
-    showToast('云同步已自动启用，无需手动配置', 'success');
+    var input = document.getElementById('syncTokenInput');
+    if (!input) return;
+    var token = (input.value || '').trim();
+    if (!token) {
+        _SYNC_TOKEN = null;
+        _SYNC_READY = false;
+        _LAST_SYNC_HASH = '';
+        _IDB.removeItem('billApp_syncToken');
+        updateSyncStatus('未配置');
+        showToast('已清除云同步 Token', 'info');
+        return;
+    }
+    // 先验证 Token 有效性
+    _SYNC_TOKEN = token;
+    var testHeaders = {
+        'Authorization': 'token ' + token,
+        'Accept': 'application/vnd.github.v3+json'
+    };
+    fetch('https://api.github.com/repos/' + _SYNC_REPO, { headers: testHeaders, cache: 'no-store' })
+        .then(function(r) {
+            if (!r.ok) throw new Error('API ' + r.status);
+            return r.json();
+        })
+        .then(function() {
+            _SYNC_READY = true;
+            _IDB.setItem('billApp_syncToken', token);
+            updateSyncStatus('已连接');
+            showToast('Token 有效，云同步已启用！', 'success');
+            startPolling();
+            syncPush();
+            setTimeout(function() { syncPull(); }, 2000);
+        })
+        .catch(function(err) {
+            _SYNC_TOKEN = null;
+            _SYNC_READY = false;
+            updateSyncStatus('Token无效');
+            showToast('Token 无效，请检查后重试', 'error');
+        });
 }
 
 function autoFillToken() {
-    // Token 已内置，自动填入提示
-    showToast('同步已自动配置（GitHub 内置 Token）', 'info');
+    var input = document.getElementById('syncTokenInput');
+    if (!input) return;
+    input.focus();
+    showToast('请输入 GitHub Personal Access Token', 'info');
+}
+
+function clearSyncToken() {
+    _SYNC_TOKEN = null;
+    _SYNC_READY = false;
+    _LAST_SYNC_HASH = '';
+    _IDB.removeItem('billApp_syncToken');
+    updateSyncStatus('未配置');
+    var input = document.getElementById('syncTokenInput');
+    if (input) input.value = '';
+    showToast('已清除同步 Token', 'info');
 }
 
 function _hashCode(str) {

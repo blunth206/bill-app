@@ -294,16 +294,24 @@
                 <div class="section-header">
                     <h2>🔗 云同步</h2>
                 </div>
-                <p class="section-desc">通过 GitHub 仓库自动同步数据，多设备实时同步，无需手动配置</p>
+                <p class="section-desc">通过 GitHub 仓库自动同步数据，多设备实时同步。首次需填写一次 Token（存在本机，不会上传）</p>
                 <div style="display:flex;align-items:center;gap:10px;padding:12px 16px;background:var(--card-bg);border-radius:10px;margin-top:8px;">
                     <span>同步状态：</span>
                     <span id="syncStatus" class="sync-status">初始化中...</span>
                     <button class="btn" onclick="forceSyncDown()" style="font-size:12px;padding:4px 12px;margin-left:auto;">🔄 拉取</button>
                     <button class="btn btn-primary" onclick="forceSyncUp()" style="font-size:12px;padding:4px 12px;">⬆ 推送</button>
                 </div>
+                <div style="margin-top:12px;">
+                    <label style="font-size:13px;color:var(--text-secondary);display:block;margin-bottom:4px;">GitHub Token（ghp_...）</label>
+                    <div style="display:flex;gap:8px;">
+                        <input type="password" id="syncTokenInput" placeholder="ghp_xxxxxxxx" autocomplete="off" style="flex:1;padding:8px 12px;border:1px solid var(--border);border-radius:8px;font-size:13px;font-family:monospace;">
+                        <button class="btn btn-primary" onclick="saveSyncUrl()" style="white-space:nowrap;">保存</button>
+                        <button class="btn" onclick="clearSyncToken()" style="white-space:nowrap;font-size:12px;">清除</button>
+                    </div>
+                </div>
                 <p class="hint" style="margin-top:8px;">
-                    同步已自动启用（内置 Token），打开 App 后自动拉取/推送。<br>
-                    数据存储在 GitHub 仓库的 <code>sync-data.json</code> 文件中。
+                    获取方式：GitHub → Settings → Developer settings → Personal access tokens → 勾选 <code>repo</code> 权限生成。<br>
+                    Token 仅保存在本机浏览器（IndexedDB），不会提交到代码仓库，多设备各填一次即可自动同步。
                 </p>
 
                 <hr style="margin:28px 0;border:1px solid var(--border);">
