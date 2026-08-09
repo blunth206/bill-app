@@ -111,6 +111,7 @@ function initCloudSync() {
     console.log('云同步已启用（内置 Token）');
     updateSyncStatus('已连接');
     startPolling();
+    return Promise.resolve();
 }
 
 function _apiFetch(method, path, body) {
