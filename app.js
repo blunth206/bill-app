@@ -95,7 +95,10 @@ function _migrateFromLocalStorage() {
 }
 
 // ==================== GitHub 云同步层（repo 文件存储，Token 内置） ====================
-var _SYNC_TOKEN = null;   // 从 IndexedDB 读取，不写死在代码里
+// 🔑 内置默认 Token：首次使用自动应用，用户无需手动配置
+// 注意：Token 写死在代码中，若 APP 公开给他人使用请谨慎（网页源码可见 Token）
+var _SYNC_TOKEN = null;   // 运行时会优先使用内置 token，若用户设置了新的则用用户的
+var _BUILTIN_SYNC_TOKEN = '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';
 var _SYNC_SHA = null;       // 云端文件 SHA，用于更新
 var _SYNC_READY = false;    // 有 Token 才启用
 var _SYNC_TIMER = null;
@@ -111,6 +114,12 @@ function initCloudSync() {
     return _IDB.getItem('billApp_syncToken').then(function(saved) {
         if (saved) {
             _SYNC_TOKEN = saved;
+        } else if (_BUILTIN_SYNC_TOKEN) {
+            // 用户未配置时，自动使用内置 token
+            _SYNC_TOKEN = _BUILTIN_SYNC_TOKEN;
+            _IDB.setItem('billApp_syncToken', _BUILTIN_SYNC_TOKEN);
+        }
+        if (_SYNC_TOKEN) {
             _SYNC_READY = true;
             updateSyncStatus('已连接');
             startPolling();
@@ -119,14 +128,27 @@ function initCloudSync() {
             updateSyncStatus('未配置');
         }
         var input = document.getElementById('syncTokenInput');
-        if (input && saved) input.value = saved;
+        if (input && _SYNC_TOKEN) input.value = _SYNC_TOKEN;
     }).catch(function() {
-        _SYNC_READY = false;
-        updateSyncStatus('未配置');
+        if (_BUILTIN_SYNC_TOKEN) {
+            _SYNC_TOKEN = _BUILTIN_SYNC_TOKEN;
+            _SYNC_READY = true;
+            updateSyncStatus('已连接');
+            startPolling();
+        } else {
+            _SYNC_READY = false;
+            updateSyncStatus('未配置');
+        }
     });
 }
 
 function _apiFetch(method, path, body) {
+    return _apiFetchRetry(method, path, body, 0);
+}
+
+// 带自动重试的 API 请求，应对 GitHub HTTP/2 间歇性解码错误
+function _apiFetchRetry(method, path, body, attempt) {
+    attempt = attempt || 0;
     var headers = {
         'Authorization': 'token ' + _SYNC_TOKEN,
         'Accept': 'application/vnd.github.v3+json'
@@ -136,6 +158,8 @@ function _apiFetch(method, path, body) {
         headers['Content-Type'] = 'application/json';
         opts.body = JSON.stringify(body);
     }
+    // 尝试强制 HTTP/1.1，避免 GitHub HTTP/2 响应在部分网络下的解码错误
+    opts.headers['X-Requested-With'] = 'bill-app';
     var url = 'https://api.github.com' + path;
     console.log('[同步] API请求:', method, url, body ? '(有body)' : '');
     return fetch(url, opts).then(function(r) {
@@ -153,6 +177,19 @@ function _apiFetch(method, path, body) {
             });
         }
         return r.json();
+    }).catch(function(err) {
+        // 网络错误（如 HTTP/2 解码失败）时自动重试最多2次
+        var msg = (err && err.message) || '';
+        var isNetworkErr = /fetch|network|failed|http2|typeerror|could not/i.test(msg);
+        if (isNetworkErr && attempt < 2) {
+            console.warn('[同步] 网络错误，' + (attempt + 1) + '秒后重试 (' + (attempt + 1) + '/2):', msg);
+            return new Promise(function(resolve) {
+                setTimeout(resolve, 1000 * (attempt + 1));
+            }).then(function() {
+                return _apiFetchRetry(method, path, body, attempt + 1);
+            });
+        }
+        throw err;
     });
 }
 
@@ -335,20 +372,24 @@ function syncPull() {
         return Promise.resolve(false);
     }
     console.log('[同步] 拉取中...');
+    updateSyncStatus('同步中...');
     return _apiFetch('GET', _SYNC_PATH).then(function(fileInfo) {
         if (!fileInfo || !fileInfo.content) {
             console.log('[同步] 拉取: 云端无数据');
+            updateSyncStatus('已连接');  // 连接正常但无数据
             return false;
         }
         var content = decodeURIComponent(escape(atob(fileInfo.content.replace(/\s/g, ''))));
         var hash = _hashCode(content);
         if (hash === _LAST_SYNC_HASH) {
             console.log('[同步] 拉取: 无变化，跳过');
+            updateSyncStatus('已同步');  // 已连接且无变化
             return false;
         }
         var cloudData = JSON.parse(content);
         if (!cloudData.bills) {
             console.log('[同步] 拉取: 云端无账单数据');
+            updateSyncStatus('已连接');
             return false;
         }
         var oldBills = APP_DATA.bills.length;
@@ -2176,31 +2217,51 @@ function roundRect(ctx, x, y, w, h, r) {
 }
 
 // 下载图片（使用 toBlob 避免 toDataURL 的 base64 大字符串导致 WebView OOM 崩溃）
+// 在TWA/WebView环境中，优先用 navigator.share 分享（可保存到相册/分享），避免 <a download> 闪退
 function downloadImage(canvas, pageTitle) {
     var fileName = (pageTitle || '账单') + '_' + new Date().toISOString().split('T')[0] + '.png';
-    // 优先使用 toBlob（二进制，内存友好），降级使用 toDataURL
-    if (canvas.toBlob) {
-        canvas.toBlob(function(blob) {
-            var url = URL.createObjectURL(blob);
-            var link = document.createElement('a');
-            link.download = fileName;
-            link.href = url;
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-            // 延迟释放 Blob URL，确保下载已触发
-            setTimeout(function() { URL.revokeObjectURL(url); }, 1000);
-            showToast('图片已下载', 'success');
-        }, 'image/png', 0.92);
+
+    // 判断是否在 TWA/WebView 环境（无普通下载能力）
+    var isTwa = /android|webview/i.test(navigator.userAgent) || window.twa || (window.cordova);
+
+    canvas.toBlob(function(blob) {
+        if (!blob) { showToast('图片生成失败', 'error'); return; }
+        var url = URL.createObjectURL(blob);
+
+        // 方案1：Web Share API（可保存相册/分享），在 TWA/WebView 上最可靠
+        if (navigator.share && navigator.canShare && navigator.canShare({ files: [new File([blob], fileName, { type: 'image/png' })] })) {
+            var file = new File([blob], fileName, { type: 'image/png' });
+            navigator.share({ files: [file], title: pageTitle || '账单' }).then(function() {
+                showToast('已分享/保存图片', 'success');
+            }).catch(function(e) {
+                // 用户取消或分享失败，回退到下载
+                console.log('分享取消，回退下载:', e.message);
+                fallbackDownload(url, fileName, isTwa);
+            });
+        }
+        // 方案2：普通 <a download> 下载（非WebView环境）
+        else {
+            fallbackDownload(url, fileName, isTwa);
+        }
+
+        setTimeout(function() { URL.revokeObjectURL(url); }, 2000);
+    }, 'image/png', 0.92);
+}
+
+// 普通下载回退
+function fallbackDownload(url, fileName, isTwa) {
+    var link = document.createElement('a');
+    link.download = fileName;
+    link.href = url;
+    link.rel = 'noopener';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    if (isTwa) {
+        // TWA下<a download>可能不触发，提示用户长按或换浏览器
+        showToast('若未开始下载，请长按图片或使用浏览器打开', 'info');
     } else {
-        // 极旧浏览器降级
-        var link = document.createElement('a');
-        link.download = fileName;
-        link.href = canvas.toDataURL('image/png');
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        showToast('图片已下载', 'info');
+        showToast('图片已下载', 'success');
     }
 }
 
@@ -2495,9 +2556,25 @@ function exportAllData() {
     };
     var blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
     var url = URL.createObjectURL(blob);
+    var fileName = '记账数据备份_' + new Date().toISOString().slice(0, 10) + '.json';
+    // TWA/WebView环境优先用分享
+    if (navigator.share && navigator.canShare && navigator.canShare({ files: [new File([blob], fileName, { type: 'application/json' })] })) {
+        navigator.share({ files: [new File([blob], fileName, { type: 'application/json' })], title: '记账数据备份' }).catch(function() {
+            // 用户取消，回退下载
+            downloadBlobFallback(url, fileName);
+        });
+        setTimeout(function() { URL.revokeObjectURL(url); }, 2000);
+        showToast('已分享/保存数据', 'success');
+    } else {
+        downloadBlobFallback(url, fileName);
+    }
+}
+
+// 数据文件下载回退
+function downloadBlobFallback(url, fileName) {
     var a = document.createElement('a');
     a.href = url;
-    a.download = '记账数据备份_' + new Date().toISOString().slice(0, 10) + '.json';
+    a.download = fileName;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -2886,8 +2963,25 @@ function openImportModal() {
     window._currentOCRFile = null;
     if (typeof setOCRMode === 'function') setOCRMode('auto');
     clearPasteContent();
-    openModal('importModal');
+    // 清除上一次识别出的预览记录（表格、区域、计数）
     window._previewBills = [];
+    window._dupResults = [];
+    window._ocrLastText = '';
+    window._ocrCorrectionInfo = null;
+    var previewArea = document.getElementById('previewArea');
+    if (previewArea) { previewArea.style.display = 'none'; }
+    var tbody = document.getElementById('previewTbody');
+    if (tbody) { tbody.innerHTML = ''; }
+    var countEl = document.getElementById('previewCount');
+    if (countEl) { countEl.textContent = '0'; }
+    var dupBar = document.getElementById('dupWarningBar');
+    if (dupBar) { dupBar.style.display = 'none'; }
+    // 重置OCR引擎徽章为默认值，避免显示旧的失败状态
+    window._ocrActualEngine = null;
+    if (typeof updateOCREngineBadge === 'function') updateOCREngineBadge();
+    // 加载框选模板
+    if (typeof loadBoxTemplates === 'function') loadBoxTemplates();
+    openModal('importModal');
 }
 
 function closeImportModal() {
@@ -3118,17 +3212,30 @@ function parseTextContent(text, sourceName) {
     showPreview(bills, userId);
 }
 
+// ============================================================
+// 🔒【锁定】parseDateStr：微信账单列表日期解析（勿改，已精调）
+//   支持格式：2024-01-15 / 08/08 / 8月6日 / 8月 6日 / 2024年8月9日
+//   特点：容忍Tesseract识别出的中间空格、中文/斜杠/横杠日期
+//   后续改其他格式时不要动此函数
+// ============================================================
 function parseDateStr(str) {
     if (!str) return null;
     str = str.trim();
+    // 2024年01月15日 / 2024年1月15日
+    var m2 = str.match(/(\d{4})年(\d{1,2})月(\d{1,2})日?/);
+    if (m2) return m2[1] + '-' + m2[2].padStart(2, '0') + '-' + m2[3].padStart(2, '0');
     // 2024-01-15 / 2024/01/15 / 2024.01.15
     var m = str.match(/(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);
     if (m) return m[1] + '-' + m[2].padStart(2, '0') + '-' + m[3].padStart(2, '0');
-    // 1月15日 / 01-15
-    m = str.match(/(\d{1,2})[月\-](\d{1,2})[日]?/);
+    // 1月15日 / 01-15 / 08/08 / 8月 6日（Tesseract中间可能有空格）
+    m = str.match(/(\d{1,2})\s*[月\-\/]\s*(\d{1,2})\s*[日]?/);
     if (m) {
-        var now = new Date();
-        return now.getFullYear() + '-' + m[1].padStart(2, '0') + '-' + m[2].padStart(2, '0');
+        var month = parseInt(m[1], 10), day = parseInt(m[2], 10);
+        if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+            var now = new Date();
+            var year = now.getFullYear();
+            return year + '-' + String(month).padStart(2, '0') + '-' + String(day).padStart(2, '0');
+        }
     }
     return null;
 }
@@ -3450,22 +3557,8 @@ function showPreview(bills, userId) {
     document.getElementById('previewCount').textContent = bills.length;
     document.getElementById('previewArea').style.display = 'block';
     
-    // 更新OCR引擎徽章
-    var badge = document.getElementById('ocrEngineBadge');
-    if (badge) {
-        var engine = window._ocrActualEngine || _ocrEngine || 'tesseract';
-        var isFallback = String(engine).indexOf('fallback') >= 0;
-        if (engine === 'baidu' || engine === 'tencent') {
-            badge.textContent = (engine === 'baidu' ? '☁️ 百度AI' : '☁️ 腾讯云');
-            badge.className = 'ocr-engine-badge cloud';
-        } else if (isFallback) {
-            badge.textContent = (engine.indexOf('baidu') >= 0 ? '⚠️ 百度失败→本地' : '⚠️ 腾讯失败→本地');
-            badge.className = 'ocr-engine-badge fallback';
-        } else {
-            badge.textContent = '💻 Tesseract';
-            badge.className = 'ocr-engine-badge';
-        }
-    }
+    // 更新OCR引擎徽章（提取为独立函数供多处调用）
+    updateOCREngineBadge();
     
     // 显示/隐藏重复警告
     var dupBar = document.getElementById('dupWarningBar');
@@ -4327,14 +4420,20 @@ function handleCameraCapture(input) {
 }
 
 // ==================== OCR 截图识别 ====================
+// ============================================================
+// 🔒【锁定】preprocessImage：图片预处理（勿改，已针对微信账单精调）
+//   - 3x放大 + 平滑 + 高对比度二值化
+//   - 黄色金额变纯黑、浅灰日期(如#999)加深、肤色头像涂白
+//   - 云端OCR(baidu/tencent)走原图直传分支
+//   后续改其他格式时不要动此函数
+// ============================================================
 function preprocessImage(file) {
     return new Promise(function(resolve, reject) {
         var img = new Image();
         img.onload = function() {
-            var MAX_DIM = 2000; // 限制最大尺寸，防止大图OOM
+            var MAX_DIM = 2000;
             var origW = img.width, origH = img.height;
-            var scale = 2;
-            // 如果缩放后超过最大尺寸，进一步降低 scale
+            var scale = 3;  // 3x放大，文字更大更清晰，利于Tesseract识别小字
             if (Math.max(origW, origH) * scale > MAX_DIM) {
                 scale = MAX_DIM / Math.max(origW, origH);
             }
@@ -4342,26 +4441,120 @@ function preprocessImage(file) {
             canvas.width = Math.floor(origW * scale);
             canvas.height = Math.floor(origH * scale);
             var ctx = canvas.getContext('2d');
-            ctx.imageSmoothingEnabled = false;
+            ctx.imageSmoothingEnabled = true;  // 平滑放大，减少锯齿，文字更清晰
+            ctx.imageSmoothingQuality = 'high';
             ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
             var imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
             var data = imageData.data;
 
+            // 云端OCR（百度/腾讯）使用原图效果更好，跳过自定义预处理
+            var engine = (typeof _ocrEngine !== 'undefined') ? _ocrEngine : 'tesseract';
+            if (engine === 'baidu' || engine === 'tencent') {
+                ctx.putImageData(imageData, 0, 0);
+                resolve(canvas);
+                return;
+            }
+
+            // 本地Tesseract预处理：白底深字/浅灰字的高对比度二值化
+            // 微信账单列表：白底 + 深灰主文字(约#444) + 浅灰日期(约#999) + 黄色金额
             for (var i = 0; i < data.length; i += 4) {
                 var r = data[i], g = data[i + 1], b = data[i + 2];
-                var isYellowish = r > 180 && g > 130 && b < 130 && (r - b) > 60 && (g - b) > 30;
-                var isDark = r < 100 && g < 100 && b < 100;
+                var gray = 0.299 * r + 0.587 * g + 0.114 * b;
+
+                // 黄色金额：放宽识别范围，识别所有橙黄色系
+                // 微信账单金额通常是 rgb(229,162,43) 这种橙黄色
+                var isYellowish = r > 170 && r < 255 && g > 120 && g < 200 && b < 100 && r > b + 60 && g > b + 30;
+                // 排除肤色（肤色R<G<B，黄色R>G>B）
+                var isSkin = r > 150 && g > 110 && b > 80 && r >= g - 30 && g >= b - 20;
+                // 仅当是黄色且非肤色才处理
+                isYellowish = isYellowish && !isSkin;
+
+                // 白色或接近白色背景 -> 纯白（255）
+                var isWhite = gray > 230;
+
+                // 浅灰文字（如日期 #999）-> 加深为深灰（约 #333，值51）
+                var isLightText = gray >= 130 && gray <= 230;
+
+                // 深色文字（主文字 #444、黑色）-> 纯黑（0）
+                var isDarkText = gray < 130;
+
                 if (isYellowish) {
+                    // 黄色金额 -> 纯黑（突出，便于Tesseract识别）
                     data[i] = 0; data[i + 1] = 0; data[i + 2] = 0;
-                } else if (isDark) {
-                    var val = 255 - Math.min(255, ((255 - r) + (255 - g) + (255 - b)) / 3 * 2.2);
+                } else if (isWhite) {
+                    // 背景 -> 纯白
+                    data[i] = 255; data[i + 1] = 255; data[i + 2] = 255;
+                } else if (isLightText) {
+                    // 浅灰文字（日期）-> 加深到深灰，比背景更黑
+                    var val = Math.max(0, gray - 90);
                     data[i] = val; data[i + 1] = val; data[i + 2] = val;
+                } else if (isDarkText) {
+                    // 深色主文字 -> 纯黑
+                    data[i] = 0; data[i + 1] = 0; data[i + 2] = 0;
+                } else if (isSkin) {
+                    // 肤色头像背景 -> 纯白（去掉干扰）
+                    data[i] = 255; data[i + 1] = 255; data[i + 2] = 255;
                 } else {
-                    var gray = 0.299 * r + 0.587 * g + 0.114 * b;
-                    var adjusted = (gray - 128) * 1.5 + 128;
-                    var val = Math.max(0, Math.min(255, adjusted));
-                    data[i] = val; data[i + 1] = val; data[i + 2] = val;
+                    // 兜底：保持原灰度
+                    data[i] = gray; data[i + 1] = gray; data[i + 2] = gray;
                 }
+            }
+            ctx.putImageData(imageData, 0, 0);
+            resolve(canvas);
+        };
+        img.onerror = reject;
+        img.src = URL.createObjectURL(file);
+    });
+}
+
+// ============================================================
+// ✨【新增】preprocessImageForTransfer：微信转账详情页专用预处理
+//   与preprocessImage不同：
+//   - 不做激进的浅灰→黑色处理（避免破坏大字号标题/金额）
+//   - 头像圆形区域保留原色
+//   - 仅做基本放大和清晰化
+//   - 用于微信转账/红包等详情页
+// ============================================================
+function preprocessImageForTransfer(file) {
+    return new Promise(function(resolve, reject) {
+        var img = new Image();
+        img.onload = function() {
+            var MAX_DIM = 2400;
+            var origW = img.width, origH = img.height;
+            var scale = 4;  // 4x放大，标题/金额字号超大，需要更大放大
+            if (Math.max(origW, origH) * scale > MAX_DIM) {
+                scale = MAX_DIM / Math.max(origW, origH);
+            }
+            var canvas = document.createElement('canvas');
+            canvas.width = Math.floor(origW * scale);
+            canvas.height = Math.floor(origH * scale);
+            var ctx = canvas.getContext('2d');
+            ctx.imageSmoothingEnabled = true;
+            ctx.imageSmoothingQuality = 'high';
+            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+            // 专门增强大字号橙色/黑色金额（如 -50.00、-2000.00）
+            // 微信支付金额是橙黄色 #FA9D3B，大字号黑色（如 -2000.00）也可能被识别错
+            var imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            var data = imageData.data;
+            for (var i = 0; i < data.length; i += 4) {
+                var r = data[i], g = data[i + 1], b = data[i + 2];
+                var gray = 0.299 * r + 0.587 * g + 0.114 * b;
+                // 橙色金额（放宽识别范围）：r大、g中、b小
+                var isOrange = r > 180 && g > 100 && g < 200 && b < 130 && r > b + 50;
+                // 大字号黑色数字（深灰）
+                var isDeepDark = gray > 0 && gray < 100;
+                // 白色背景保持
+                var isWhite = gray > 240;
+                if (isOrange) {
+                    // 橙色金额 → 纯黑（突出，让Tesseract识别）
+                    data[i] = 0; data[i + 1] = 0; data[i + 2] = 0;
+                } else if (isDeepDark && !isWhite) {
+                    // 已经是深色，保持
+                } else if (isWhite) {
+                    // 背景保持白
+                }
+                // 其他颜色（头像、中间灰色）保持原色
             }
             ctx.putImageData(imageData, 0, 0);
             resolve(canvas);
@@ -4486,7 +4679,13 @@ var _OCR_LEARN = (function() {
     }
 
     // 自动修正bills，同时返回规则中记录的截图类型
-    function autoCorrect(bills, ocrText) {
+    function autoCorrect(bills, ocrText, currentScreenshotType) {
+        // 【保护】已锁定的识别模式不应用学习修正，防止错误学习规则破坏精调结果
+        var LOCKED_TYPES = ['wechatBill', 'wechatTransfer', 'singlePayment'];
+        if (LOCKED_TYPES.indexOf(currentScreenshotType) !== -1) {
+            console.log('[OCR学习] 🔒 当前为锁定模式(' + currentScreenshotType + ')，跳过学习修正以保护识别精度');
+            return Promise.resolve({ bills: bills, applied: false, match: null, correctionCount: 0, screenshotType: currentScreenshotType || null });
+        }
         return matchBest(ocrText).then(function(match) {
             if (!match) return { bills: bills, applied: false, match: null, correctionCount: 0, screenshotType: null };
 
@@ -4633,7 +4832,7 @@ var _OCR_LEARN = (function() {
 
 // ==================== 多引擎OCR识别 ====================
 // OCR引擎配置：tesseract(本地) / baidu(百度AI) / tencent(腾讯云)
-var _ocrEngine = 'tesseract';         // 当前选择的OCR引擎
+var _ocrEngine = 'tesseract';      // 当前选择的OCR引擎（默认Tesseract，用户可在设置页改）
 var _baiduAccessToken = null;        // 百度API access_token缓存
 var _baiduTokenExpire = 0;           // 百度token过期时间戳
 
@@ -4642,11 +4841,11 @@ function loadOCRConfig() {
     // 默认密钥配置（仅当没有已保存配置时自动写入）
     var DEFAULTS = {
         engine: 'tesseract',
-        corsProxy: '',
-        baiduApiKey: '',
-        baiduSecretKey: '',
-        tencentSecretId: '',
-        tencentSecretKey: ''
+        corsProxy: 'http://localhost:9000',
+        baiduApiKey: 'WR0LleTEML63Cip7xlYijarq',
+        baiduSecretKey: 'QAp4oABsIQ8w20h1p8KowxQleCTlHgbD',
+        tencentSecretId: 'AKIDTH0d8d4Vo02sBKJ6h7OVQGwQhnhQwlPv',
+        tencentSecretKey: 'MWWJvLhsvSwELeliVBj7JKEyb5TfeSL'
     };
 
     _IDB.getItem('billApp_ocrConfig').then(function(data) {
@@ -4660,12 +4859,15 @@ function loadOCRConfig() {
             _IDB.setItem('billApp_ocrConfig', JSON.stringify(DEFAULTS));
             console.log('[OCR引擎] 首次使用，已自动配置默认密钥');
         } else {
-            // 补充缺失字段
+            // 补充缺失字段，以及空字符串字段
             var updated = false;
             for (var k in DEFAULTS) {
-                if (!(k in cfg)) { cfg[k] = DEFAULTS[k]; updated = true; }
+                if (!(k in cfg) || !cfg[k]) { cfg[k] = DEFAULTS[k]; updated = true; }
             }
-            if (updated) _IDB.setItem('billApp_ocrConfig', JSON.stringify(cfg));
+            if (updated) {
+                _IDB.setItem('billApp_ocrConfig', JSON.stringify(cfg));
+                console.log('[OCR引擎] 补充空字段，已写入默认密钥');
+            }
         }
 
         // 应用到全局
@@ -4673,6 +4875,9 @@ function loadOCRConfig() {
         if (cfg.baiduApiKey && cfg.baiduSecretKey) {
             window._baiduApiKey = cfg.baiduApiKey;
             window._baiduSecretKey = cfg.baiduSecretKey;
+            console.log('[OCR引擎] ✓ 百度密钥已加载: API Key=' + cfg.baiduApiKey.substring(0,8) + '...');
+        } else {
+            console.log('[OCR引擎] ✗ 百度密钥未配置（请在设置页填入并保存）');
         }
         if (cfg.tencentSecretId && cfg.tencentSecretKey) {
             window._tencentSecretId = cfg.tencentSecretId;
@@ -4712,12 +4917,14 @@ function setOCREngine(engine) {
 
 // 恢复引擎为Tesseract默认
 function resetOCREngineToDefault() {
-    if (_ocrEngine !== 'tesseract') {
-        _ocrEngine = 'tesseract';
+    // 默认引擎回退为 Tesseract（用户可在设置页改成百度或腾讯）
+    var defaultEngine = 'tesseract';
+    if (_ocrEngine !== defaultEngine) {
+        _ocrEngine = defaultEngine;
         updateOCREngineUI();
         var reBtn = document.getElementById('btnReRecognize');
         if (reBtn) reBtn.classList.remove('visible');
-        console.log('[OCR引擎] 自动恢复为默认引擎 Tesseract');
+        console.log('[OCR引擎] 自动恢复为默认引擎 百度AI');
     }
 }
 
@@ -4730,6 +4937,24 @@ function updateOCREngineUI() {
     // 同步设置页面的下拉框
     var sel = document.getElementById('ocrEngineSelect');
     if (sel) sel.value = _ocrEngine;
+}
+
+// 更新OCR引擎徽章文字和样式（独立函数）
+function updateOCREngineBadge() {
+    var badge = document.getElementById('ocrEngineBadge');
+    if (!badge) return;
+    var engine = window._ocrActualEngine || _ocrEngine || 'tesseract';
+    var isFallback = String(engine).indexOf('fallback') >= 0;
+    if (engine === 'baidu' || engine === 'tencent') {
+        badge.textContent = (engine === 'baidu' ? '☁️ 百度AI' : '☁️ 腾讯云');
+        badge.className = 'ocr-engine-badge cloud';
+    } else if (isFallback) {
+        badge.textContent = (engine.indexOf('baidu') >= 0 ? '⚠️ 百度失败→本地' : '⚠️ 腾讯失败→本地');
+        badge.className = 'ocr-engine-badge fallback';
+    } else {
+        badge.textContent = '💻 Tesseract';
+        badge.className = 'ocr-engine-badge';
+    }
 }
 
 // 保存引擎选择到 IndexedDB
@@ -4767,10 +4992,15 @@ function saveBaiduOcrConfig() {
     loadOCRConfigFull().then(function(cfg) {
         cfg.baiduApiKey = apiKey;
         cfg.baiduSecretKey = secretKey;
-        _IDB.setItem('billApp_ocrConfig', JSON.stringify(cfg));
+        return _IDB.setItem('billApp_ocrConfig', JSON.stringify(cfg));
+    }).then(function() {
+        console.log('[OCR引擎] ✓ 百度密钥已保存到 IndexedDB');
         var st = document.getElementById('baiduConfigStatus');
         if (st) { st.textContent = '✓ 已保存'; st.style.color = '#22c55e'; setTimeout(function(){st.textContent='';},3000); }
         showToast('百度OCR配置已保存', 'success');
+    }).catch(function(err) {
+        console.error('[OCR引擎] 保存百度配置失败:', err);
+        showToast('保存失败: ' + (err.message || err), 'error');
     });
 }
 
@@ -4817,6 +5047,13 @@ function onOCRenginchanged() {
     var tCfg = document.getElementById('tencentOcrConfig');
     if (!sel) return;
     var v = sel.value;
+    // 切换引擎时立即更新全局变量并保存到 IndexedDB
+    if (v && v !== _ocrEngine) {
+        _ocrEngine = v;
+        updateOCREngineUI();
+        saveOCREngineSetting();
+        console.log('[OCR引擎] 下拉框切换引擎至: ' + v);
+    }
     if (bCfg) bCfg.style.display = (v === 'baidu') ? 'block' : 'none';
     if (tCfg) tCfg.style.display = (v === 'tencent') ? 'block' : 'none';
 }
@@ -4902,7 +5139,7 @@ function _remoteFetchGET(url) {
                 });
             });
     }
-    return fetch(url, { method: 'POST' }).then(function(r) { return r.json(); });
+    return fetch(url, { method: 'GET' }).then(function(r) { return r.json(); });
 }
 
 // 通过CORS代理发送POST请求（返回JSON）
@@ -5060,7 +5297,11 @@ function ocrRecognize(imageDataUrl, options) {
     });
 }
 
-// Tesseract OCR（原逻辑封装）
+// ============================================================
+// 🔒【锁定】ocrTesseract：本地Tesseract识别（勿改）
+//   与preprocessImage配合，实现微信账单列表高精度识别
+//   后续改其他格式时不要动此函数
+// ============================================================
 function ocrTesseract(imageDataUrl, options) {
     options = options || {};
     var lang = 'chi_sim+eng';
@@ -5091,6 +5332,10 @@ function reRecognize() {
     var engineLabels = { tesseract: 'Tesseract', baidu: '百度AI', tencent: '腾讯云' };
     var engine = _ocrEngine;
 
+    // 重置实际引擎徽章，避免显示旧的失败状态
+    window._ocrActualEngine = engine;
+    updateOCREngineBadge();
+
     progressDiv.style.display = 'flex';
     progressText.textContent = '正在用' + (engineLabels[engine] || '') + '重新识别...';
 
@@ -5098,7 +5343,11 @@ function reRecognize() {
     var reBtn = document.getElementById('btnReRecognize');
     if (reBtn) reBtn.classList.remove('visible');
 
-    preprocessImage(file).then(function(processedCanvas) {
+    // 选择预处理函数：微信转账/详情页模式用专用预处理（不激进处理大字号标题/金额）
+    var activeBtn = document.querySelector('.btn-ocr-engine.active');
+    var useTransferPre = activeBtn && activeBtn.dataset.engine === 'wechatTransfer';
+    var prepPromise = useTransferPre ? preprocessImageForTransfer(file) : preprocessImage(file);
+    prepPromise.then(function(processedCanvas) {
         var dataUrl = processedCanvas.toDataURL('image/png');
 
         ocrRecognize(dataUrl, {
@@ -5155,12 +5404,14 @@ function processImageOCR(file) {
     var engineLabels = { tesseract: 'Tesseract', baidu: '百度AI', tencent: '腾讯云' };
     progressText.textContent = '正在用' + (engineLabels[_ocrEngine] || '') + '识别...';
 
-    // 先预处理图像
-    preprocessImage(file).then(function(processedCanvas) {
+    // 第一关：先用温和预处理判断图片模式
+    // 温和预处理（preprocessImageForTransfer）不破坏任何图片结构，
+    // 既能识别微信转账详情页的大字号标题/金额，也能识别账单列表
+    preprocessImageForTransfer(file).then(function(processedCanvas) {
         var dataUrl = processedCanvas.toDataURL('image/png');
 
         // 统一OCR接口（自动根据引擎选择）
-        ocrRecognize(dataUrl, {
+        return ocrRecognize(dataUrl, {
             logger: function(info) {
                 if (info.status === 'recognizing text') {
                     var pct = Math.round(info.progress * 100);
@@ -5172,8 +5423,32 @@ function processImageOCR(file) {
             var text = result.text;
             // 保存原始OCR文本供学习功能使用
             window._ocrLastText = text;
-            // 解析OCR文本
-            parseOCRText(text, userId);
+
+            // 第一关：判断图片模式
+            var mode = detectImageModeFromText(text);
+            window._detectedImageMode = mode;
+            console.log('[模式预判] 检测到图片模式:', mode);
+
+            // 第二关：根据模式选择解析
+            if (mode === 'wechatBill') {
+                // 微信账单列表：用激进预处理重新识别，提升精度
+                return preprocessImage(file).then(function(processed2) {
+                    var dataUrl2 = processed2.toDataURL('image/png');
+                    progressDiv.style.display = 'flex';
+                    progressText.textContent = '检测到微信账单列表，正在精细识别...';
+                    return ocrRecognize(dataUrl2, {}).then(function(result2) {
+                        progressDiv.style.display = 'none';
+                        window._ocrLastText = result2.text;
+                        parseOCRText(result2.text, userId, mode);
+                    });
+                });
+            } else if (mode === 'wechatTransfer' || mode === 'singlePayment') {
+                // 微信转账/单笔支付：用温和预处理的结果直接解析
+                parseOCRText(text, userId, mode);
+            } else {
+                // 未知模式：尝试用现有解析
+                parseOCRText(text, userId, mode);
+            }
         }).catch(function(err) {
             progressDiv.style.display = 'none';
             showToast('OCR识别失败：' + err.message, 'error');
@@ -5184,6 +5459,69 @@ function processImageOCR(file) {
     }).catch(function(err) {
         progressDiv.style.display = 'none';
         showToast('图片处理失败：' + err.message, 'error');
+    });
+}
+
+// ============================================================
+// ✨【新增】detectImageModeFromText：根据OCR文本判断图片模式（纯文本判断，无网络）
+//   返回：'wechatBill' | 'wechatTransfer' | 'singlePayment' | 'unknown'
+// ============================================================
+function detectImageModeFromText(text) {
+    var txt = text || '';
+    var tns = txt.replace(/\s+/g, '');
+
+    // 微信账单列表特征：多条带符号金额 + 转账/扫码前缀
+    var billCount = (txt.match(/[+-]\s*[\d,]+\.\d{2}/g) || []).length;
+    var hasBillPrefix = /转账[-—]?来自|转账[-—]?转?给|扫.*?付款[-—]?给|二.*?码收款[-—]?来自/.test(tns);
+    var hasBillListKeyword = /全部账单|交易|收支统计|账单明细|收款时间|付款时间/.test(tns);
+    if (billCount >= 3 && (hasBillPrefix || hasBillListKeyword)) {
+        return 'wechatBill';
+    }
+
+    // 微信单笔转账/支付详情页特征：当前状态 + 详情字段
+    if (/当前状态/.test(tns) && /收款方备注|付款方留言|转账时间|转账户号|转账说明/.test(tns)) {
+        return 'wechatTransfer';
+    }
+
+    // 单笔支付：支付成功 + 付款金额
+    if (/支付成功|付款成功|已支付/.test(tns) && /付款金额|支付金额|¥|￥|交易金额/.test(tns)) {
+        return 'singlePayment';
+    }
+
+    return 'unknown';
+}
+
+// ============================================================
+// ✨【新增】detectImageMode：图片模式预判（第一关）
+//   在OCR前，用温和预处理快速识别图片属于哪种模式
+//   避免"激进预处理破坏微信转账图"的问题
+//   返回：'wechatBill' | 'wechatTransfer' | 'singlePayment' | 'unknown'
+// ============================================================
+function detectImageMode(file) {
+    return preprocessImageForTransfer(file).then(function(canvas) {
+        var dataUrl = canvas.toDataURL('image/png');
+        return ocrRecognize(dataUrl, {}).then(function(result) {
+            var text = result.text || '';
+            var tns = text.replace(/\s+/g, '');
+            var type = 'unknown';
+
+            // 微信账单列表特征：多条"转账-来自/转给" + 多个金额
+            var billCount = (text.match(/[+-]\s*[\d,]+\.\d{2}/g) || []).length;
+            var hasBillPrefix = /转账[-—]?来自|转账[-—]?转?给|扫.*?付款[-—]?给|二.*?码收款[-—]?来自/.test(tns);
+            var hasBillListKeyword = /全部账单|交易|收支统计|账单明细/.test(tns);
+            if (billCount >= 3 && (hasBillPrefix || hasBillListKeyword)) {
+                type = 'wechatBill';
+            }
+            // 微信单笔转账/支付详情页特征：当前状态+详情字段（收款方备注/付款方留言/转账时间）
+            else if (/当前状态/.test(tns) && /收款方备注|付款方留言|转账时间|转账户号|转账说明/.test(tns)) {
+                type = 'wechatTransfer';
+            }
+            // 单笔支付：支付成功 + 付款金额
+            else if (/支付成功|付款成功|已支付/.test(tns) && /付款金额|支付金额|¥|￥/.test(tns)) {
+                type = 'singlePayment';
+            }
+            return type;
+        });
     });
 }
 
@@ -5244,14 +5582,17 @@ function detectScreenshotType(text, lines) {
         }
     }
 
-    // 微信单笔转账/收款截图：转账-来自、转账-转给、微信转账+转账时间/收款时间、已转入零钱通+带符号金额
-    // 注意："对方已收钱"也属于微信转账详情页特征
+    // 微信单笔转账/收款截图：转账-来自、转账-转给、扫二维码付款-给、二维码收款-来自、微信转账详情
+    // 注意："对方已收钱"、"已退款"、"扫码付款"都属于微信支付/转账详情页特征
     features.wechatTransfer = (
         /转账[-—]?来自/.test(tns) ||
         /转账[-—]?转?给/.test(tns) ||
+        /扫.*?付款[-—]?给/.test(tns) ||
+        /二.*?码收款[-—]?来自/.test(tns) ||
         (/微信转账/.test(tns) && /转账时间|收款时间|已转入零钱通/.test(tns)) ||
         (/已转入零钱通|已收款|已到账/.test(tns) && /[+-]\s*[\d,]+\.\d{2}/.test(txt)) ||
-        (/对方已收钱|已收钱/.test(tns) && /微信转账/.test(tns))
+        (/对方已收钱|已收钱/.test(tns) && /微信转账/.test(tns)) ||
+        (/当前状态/.test(tns) && /收款方备注|付款方留言|转账时间|转账户号/.test(tns))
     );
 
     // 单笔支付/收款详情：支付成功、付款金额等
@@ -5338,9 +5679,16 @@ function normalizeOcrAmount(amountStr) {
 
 // ==================== 各类型独立解析器 ====================
 
-// 解析器1：微信账单列表（保持原有完美逻辑不变）
+// ============================================================
+// 🔒【锁定】parseWeChatBill：微信账单列表解析（勿改，已精调）
+//   - 向上追溯找日期行（日期在交易行上方）
+//   - 移除行内日期/时间避免误判金额
+//   - try-catch单行保护
+//   后续改其他格式时不要动此函数
+// ============================================================
 function parseWeChatBill(lines, today, currentYear) {
     var bills = [];
+    if (!lines || !Array.isArray(lines)) return bills;
     // 找到表头位置
     var headerEnd = -1;
     for (var i = 0; i < lines.length; i++) {
@@ -5350,11 +5698,12 @@ function parseWeChatBill(lines, today, currentYear) {
     }
 
     for (var i = headerEnd + 1; i < lines.length; i++) {
-        var line = lines[i].trim();
-        if (!line || line.length < 3) continue;
+        try {
+            var line = lines[i].trim();
+            if (!line || line.length < 3) continue;
 
-        // Tesseract 常把负号识别成波浪号，先还原
-        line = line.replace(/~(?=\s*\d)/g, '-');
+            // Tesseract 常把负号识别成波浪号，先还原
+            line = line.replace(/~(?=\s*\d)/g, '-');
 
         // 跳过顶部汇总行（灰底部分：年月标题 + 支出/收入合计）
         if (/支出.*收入|收入.*支出/.test(line)) continue;
@@ -5366,17 +5715,27 @@ function parseWeChatBill(lines, today, currentYear) {
         // 跳过纯噪声行
         if (!/[\u4e00-\u9fa5]/.test(line) && !/转/.test(line) && !/[+-]\s*[\d\s,]+(?:\.\d{1,2})?/.test(line)) continue;
 
+        // 移除行内的日期和时间，避免被误认为金额
+        var lineNoDate = line
+            .replace(/\d{4}[-/.]\d{1,2}[-/.]\d{1,2}/g, '')     // 2026-08-10
+            .replace(/\d{1,2}\s*月\s*\d{1,2}\s*日?/g, '')      // 8月6日 / 8月 6日
+            .replace(/\d{1,2}[-/.]\d{1,2}\s+\d{2}:\d{2}/g, '') // 08-08 10:11
+            .replace(/\b\d{1,2}:\d{2}\b/g, '')                 // 10:30
+            .replace(/\d{4}\s*年\s*\d{1,2}\s*月/g, '')         // 2026年8月
+            .trim();
+
         // 使用行内最后一个金额作为交易金额
-        var amounts = line.match(/[+-]?\s*[\d\s,]+(?:\.\d{1,2})?/g);
+        var amounts = lineNoDate.match(/[+-]?\s*[\d\s,]+(?:\.\d{1,2})?/g);
         if (!amounts || amounts.length === 0) continue;
 
         var lastAmountStr = amounts[amounts.length - 1].replace(/\s/g, '');
         var amt = parseFloat(lastAmountStr);
         if (isNaN(amt) || Math.abs(amt) < 0.01) continue;
 
-        // 提取备注：最后一个金额前面的内容
-        var lastAmountIdx = line.lastIndexOf(amounts[amounts.length - 1]);
-        var note = lastAmountIdx > 0 ? line.substring(0, lastAmountIdx) : line;
+        // 提取备注：最后一个金额前面的内容（在lineNoDate里找位置）
+        var lastAmountStr_noSpace = amounts[amounts.length - 1];
+        var lastAmountIdx = lineNoDate.lastIndexOf(lastAmountStr_noSpace);
+        var note = lastAmountIdx > 0 ? lineNoDate.substring(0, lastAmountIdx) : lineNoDate;
         note = note.replace(/[.,·]+/g, '')
             .replace(/[，,]/g, '')
             .replace(/\s+/g, '')
@@ -5393,18 +5752,36 @@ function parseWeChatBill(lines, today, currentYear) {
             type = '收入';
         }
 
-        // 日期解析
+        // 日期解析：微信账单列表日期通常在交易行上方（独立日期行），或行内
         var date = today;
-        var dateSources = [line];
-        if (i + 1 < lines.length) dateSources.push(lines[i + 1]);
-        for (var d = 0; d < dateSources.length; d++) {
-            var parsed = parseDateStr(dateSources[d]);
-            if (parsed) { date = parsed; break; }
+        // 1) 先查当前行是否含日期
+        var parsedDate = parseDateStr(line);
+        if (parsedDate) {
+            date = parsedDate;
+        } else {
+            // 2) 向上追溯找最近的日期行（日期在交易行上方）
+            for (var k = i - 1; k >= 0; k--) {
+                if (k >= lines.length) break;
+                if (k < headerEnd + 1 && headerEnd >= 0) break;
+                var prevLine = lines[k];
+                if (!prevLine) continue;
+                prevLine = prevLine.trim();
+                if (!prevLine) continue;
+                // 如果遇到另一条交易行（含金额）就停止，避免跨交易块误匹配
+                if (/[+-]\s*[\d\s,]+\.\d{2}/.test(prevLine) && k !== i - 1) break;
+                parsedDate = parseDateStr(prevLine);
+                if (parsedDate) { date = parsedDate; break; }
+                // 只向上看3行，避免匹配到很远的日期
+                if (i - k > 3) break;
+            }
         }
 
         bills.push({
             date: date, type: type, amount: Math.abs(amt), note: note
         });
+        } catch(e) {
+            console.warn('[parseWeChatBill] 跳过异常行:', lines[i] && lines[i].substring(0, 30), '| 错误:', e.message);
+        }
     }
     return bills;
 }
@@ -5847,10 +6224,19 @@ function parseWeChatTransfer(lines, text, today, currentYear) {
     if (amountMatch) {
         amt = parseFloat(amountMatch[2].replace(/,/g, ''));
         var sign = amountMatch[1];
-        if (sign === '-') {
-            if (/来自|已转入|已收款|已到账|收款/.test(tns)) sign = '+';
+        // 优先级判断：扫码付款明确是支出；转账-来自是收入；转账-转给是支出
+        if (/扫码付款/.test(tns)) {
+            type = '支出';
+            sign = '-';
+        } else if (/来自|已转入|已收款|已到账/.test(tns) && sign === '-') {
+            sign = '+';
+            type = '收入';
+        } else if (sign === '-') {
+            // 纯负号：可能是支出
+            type = '支出';
+        } else if (sign === '+') {
+            type = '收入';
         }
-        type = sign === '+' ? '收入' : '支出';
     } else {
         var allAmts = text.match(/[\d,]+\.\d{2}/g);
         if (allAmts) {
@@ -5902,15 +6288,32 @@ function parseWeChatTransfer(lines, text, today, currentYear) {
         }
     }
 
-    // 3. 提取备注：从"转账-来自湖南常德聂新华"或"转账-转给上饶厂步艺楼梯国强"中提取（去空格版）
-    var senderMatch = tns.match(/转账[-—]?来自([^\d]{2,30})/);
+    // 3. 提取备注：多种微信转账/支付格式
+    // 优先级：扫码付款 > 转账-来自 > 转账-转给 > 二维码收款-来自
+    // 注意：OCR可能输出"扫二维码付款"（带"二""维"中间字），用.*?容忍
+    var senderMatch = tns.match(/扫.*?付款[-—]?给([^\d]{2,30})/);
     if (senderMatch) {
-        note = senderMatch[1].replace(/[,，]+/g, '').trim();
-        type = '收入';
+        note = '扫码付款给' + senderMatch[1].replace(/[,，]+/g, '').trim();
+        type = '支出';  // 扫码付款 = 你付钱给别人
+    }
+    if (!note) {
+        senderMatch = tns.match(/二.*?码收款[-—]?来自([^\d]{2,30})/);
+        if (senderMatch) {
+            note = '收款来自' + senderMatch[1].replace(/[,，]+/g, '').trim();
+            type = '收入';  // 二维码收款 = 别人付钱给你
+        }
+    }
+    if (!note) {
+        senderMatch = tns.match(/转账[-—]?来自([^\d]{2,30})/);
+        if (senderMatch) {
+            note = senderMatch[1].replace(/[,，]+/g, '').trim();
+            type = '收入';
+        }
     }
     if (!note) {
         // 支持两种格式："转账-转给xxx" 和 "转账给xxx"
-        senderMatch = tns.match(/转账[-—]?转?给([^\d]{2,30})/);
+        // 用[^\d-]排除数字和横杠，正确停止在汉字（不会匹配到"-2000"）
+        senderMatch = tns.match(/转账[-—]?转?给([^\d-]{2,30})/);
         if (senderMatch) {
             note = '转给' + senderMatch[1].replace(/[,，]+/g, '').trim();
             type = '支出';
@@ -6089,7 +6492,7 @@ function copyOcrRawText() {
 }
 
 // ==================== 主解析入口 ====================
-function parseOCRText(text, userId) {
+function parseOCRText(text, userId, preDetectedType) {
     if (!text || !text.trim()) {
         showToast('OCR未能识别到文字，请尝试更清晰的截图', 'error');
         return;
@@ -6122,8 +6525,12 @@ function parseOCRText(text, userId) {
             console.log('[OCR学习] 未匹配到学习规则（可能是首次使用此截图格式）');
         }
 
-        // 第1步：检测截图类型（学习规则优先 > 手动覆盖 > 特征检测）
-        var screenshotType = manualOverride || learnedType || detectScreenshotType(text, lines);
+        // 第1步：检测截图类型
+        // 优先级：手动覆盖 > 第一关预判 > 学习规则 > 特征检测
+        // 说明：第一关预判(preDetectedType)是基于精调特征判断的可靠模式，
+        //       优先于学习规则，防止旧的错误学习规则破坏锁定的识别模式。
+        //       学习规则仅在无预判时才使用。
+        var screenshotType = manualOverride || preDetectedType || learnedType || detectScreenshotType(text, lines);
 
         if (learnedType && !manualOverride) {
             console.log('[OCR学习] 使用学习规则指定的解析器：' + learnedType);
@@ -6223,9 +6630,9 @@ function parseOCRText(text, userId) {
         bills = filteredBills;
         console.log('[OCR v2.5] 全局过滤后剩余:', bills.length, '条');
 
-        // ---- 学习引擎自动修正（v3.1：解析器类型已由学习引擎预检决定，此处仅修正字段） ----
+        // ---- 学习引擎自动修正（锁定模式跳过，保护精调结果） ----
         if (bills.length > 0) {
-            _OCR_LEARN.autoCorrect(bills, text).then(function(result) {
+            _OCR_LEARN.autoCorrect(bills, text, screenshotType).then(function(result) {
                 bills = result.bills;
                 // 合并预检的解析器类型信息
                 if (learnedType && !result.screenshotType) {
@@ -6414,13 +6821,17 @@ function setOCRMode(mode) {
     });
     var boxToolbar = document.getElementById('boxOcrToolbar');
     var boxHint = document.getElementById('boxOcrHint');
+    var boxTemplateBar = document.getElementById('boxTemplateBar');
     if (mode === 'box') {
         boxToolbar.style.display = 'flex';
         boxHint.style.display = 'block';
+        if (boxTemplateBar) boxTemplateBar.style.display = 'flex';
         initBoxCanvas();
+        refreshBoxTemplateSelect();
     } else {
         boxToolbar.style.display = 'none';
         boxHint.style.display = 'none';
+        if (boxTemplateBar) boxTemplateBar.style.display = 'none';
     }
 }
 
@@ -6684,6 +7095,115 @@ function groupBoxResultsIntoBills(results) {
     });
 
     return bills;
+}
+
+// ============================================================
+// ✨【新增】框选模板功能：把框选位置保存为模板，下次同类型图自动框选
+//   模板存相对坐标(0-1)，适配不同尺寸图片
+//   存储：IndexedDB (billApp_boxTemplates)
+// ============================================================
+var _boxTemplates = [];
+
+// 加载框选模板列表
+function loadBoxTemplates() {
+    return _IDB.getItem('billApp_boxTemplates').then(function(saved) {
+        try {
+            _boxTemplates = saved ? JSON.parse(saved) : [];
+        } catch(e) { _boxTemplates = []; }
+        refreshBoxTemplateSelect();
+        return _boxTemplates;
+    });
+}
+
+// 刷新模板下拉框
+function refreshBoxTemplateSelect() {
+    var sel = document.getElementById('boxTemplateSelect');
+    if (!sel) return;
+    sel.innerHTML = '<option value="">-- 选择模板 --</option>';
+    _boxTemplates.forEach(function(t, i) {
+        var opt = document.createElement('option');
+        opt.value = i;
+        opt.textContent = t.name + (t.boxCount ? ' (' + t.boxCount + '框)' : '');
+        sel.appendChild(opt);
+    });
+}
+
+// 保存当前框选为模板
+function saveBoxTemplate() {
+    if (!_boxes || _boxes.length === 0) {
+        showToast('请先框选区域（金额/备注/日期）再保存模板', 'error');
+        return;
+    }
+    var displayImg = document.getElementById('previewImage');
+    var displayW = displayImg.clientWidth || 1;
+    var displayH = displayImg.clientHeight || 1;
+
+    // 转为相对坐标(0-1)，适配不同尺寸图
+    var templateBoxes = _boxes.map(function(b) {
+        return {
+            type: b.type,
+            rx: b.x / displayW,
+            ry: b.y / displayH,
+            rw: b.w / displayW,
+            rh: b.h / displayH
+        };
+    });
+
+    var name = prompt('为这个框选模板起个名字（如：微信转账详情页）：', '框选模板' + (_boxTemplates.length + 1));
+    if (!name) return;
+
+    _boxTemplates.push({
+        name: name,
+        boxes: templateBoxes,
+        boxCount: _boxes.length,
+        createdAt: new Date().toISOString()
+    });
+    _IDB.setItem('billApp_boxTemplates', JSON.stringify(_boxTemplates));
+    refreshBoxTemplateSelect();
+    showToast('📘 框选模板已保存：' + name, 'success');
+}
+
+// 应用选中的模板（自动框选相同位置）
+function applyBoxTemplate() {
+    var sel = document.getElementById('boxTemplateSelect');
+    if (!sel || sel.value === '') {
+        showToast('请先选择一个模板', 'error');
+        return;
+    }
+    var idx = parseInt(sel.value, 10);
+    var tpl = _boxTemplates[idx];
+    if (!tpl || !tpl.boxes) return;
+
+    var displayImg = document.getElementById('previewImage');
+    var displayW = displayImg.clientWidth || 1;
+    var displayH = displayImg.clientHeight || 1;
+
+    _boxes = tpl.boxes.map(function(b) {
+        return {
+            type: b.type,
+            x: Math.round(b.rx * displayW),
+            y: Math.round(b.ry * displayH),
+            w: Math.round(b.rw * displayW),
+            h: Math.round(b.rh * displayH)
+        };
+    });
+    drawBoxes();
+    showToast('已应用框选模板：' + tpl.name + '（' + tpl.boxCount + '个框）', 'success');
+}
+
+// 删除选中的模板
+function deleteBoxTemplate() {
+    var sel = document.getElementById('boxTemplateSelect');
+    if (!sel || sel.value === '') {
+        showToast('请先选择要删除的模板', 'error');
+        return;
+    }
+    var idx = parseInt(sel.value, 10);
+    if (!confirm('确定删除框选模板「' + _boxTemplates[idx].name + '」吗？')) return;
+    _boxTemplates.splice(idx, 1);
+    _IDB.setItem('billApp_boxTemplates', JSON.stringify(_boxTemplates));
+    refreshBoxTemplateSelect();
+    showToast('已删除框选模板', 'info');
 }
 
 // 框选画布交互
