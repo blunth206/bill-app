@@ -98,7 +98,7 @@ function _migrateFromLocalStorage() {
 // 🔑 内置默认 Token：首次使用自动应用，用户无需手动配置
 // 注意：Token 写死在代码中，若 APP 公开给他人使用请谨慎（网页源码可见 Token）
 var _SYNC_TOKEN = null;   // 运行时会优先使用内置 token，若用户设置了新的则用用户的
-var _BUILTIN_SYNC_TOKEN = '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';
+var _BUILTIN_SYNC_TOKEN = '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';
 var _SYNC_SHA = null;       // 云端文件 SHA，用于更新
 var _SYNC_READY = false;    // 有 Token 才启用
 var _SYNC_TIMER = null;
