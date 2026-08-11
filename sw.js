@@ -1,5 +1,5 @@
 // Service Worker - PWA 离线缓存（v20：CDN资源缓存，支持弱网/离线启动）
-const CACHE_NAME = 'jizhang-v35';
+const CACHE_NAME = 'jizhang-v37';
 const FILES_TO_CACHE = [
   '.',
   'index.html',
@@ -73,6 +73,12 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   // GitHub API 请求必须走网络（同步功能）
   if (event.request.url.includes('api.github.com')) {
+    return;
+  }
+  // 本地代理（OCR 跨域转发）和百度/腾讯 API 不走 SW，避免拦截
+  if (event.request.url.includes('localhost:') ||
+      event.request.url.includes('aip.baidubce.com') ||
+      event.request.url.includes('tencentcloudapi.com')) {
     return;
   }
 

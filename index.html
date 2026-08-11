@@ -542,6 +542,13 @@ async function handleRequest(request) {
                             <span class="toolbar-separator"></span>
                             <button class="box-tool-btn" onclick="clearAllBoxes()">清空框</button>
                             <button class="box-tool-btn primary" onclick="recognizeBoxes()">识别选中区域</button>
+                            <button class="box-tool-btn" onclick="saveBoxTemplate()" title="把当前框选位置保存为模板，下次同类型图自动框选">📘 保存模板</button>
+                        </div>
+                        <div id="boxTemplateBar" style="display:none;padding:6px 12px;background:#fef9e7;border:1px solid #f0e0a0;border-radius:8px;margin-top:8px;font-size:13px;color:#7a6500;">
+                            <span>框选模板：</span>
+                            <select id="boxTemplateSelect" style="flex:1;padding:4px 8px;border:1px solid #e0d080;border-radius:6px;"></select>
+                            <button class="box-tool-btn" onclick="applyBoxTemplate()">应用</button>
+                            <button class="box-tool-btn" onclick="deleteBoxTemplate()">删除</button>
                         </div>
                         <div class="image-preview-scroll" id="imagePreviewScroll">
                             <div class="image-preview-wrapper" id="imagePreviewWrapper">
