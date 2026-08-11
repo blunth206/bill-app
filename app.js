@@ -2217,7 +2217,7 @@ function roundRect(ctx, x, y, w, h, r) {
 }
 
 // 下载图片（使用 toBlob 避免 toDataURL 的 base64 大字符串导致 WebView OOM 崩溃）
-// 在TWA/WebView环境中，优先用 navigator.share 分享（可保存到相册/分享），避免 <a download> 闪退
+// 在TWA/WebView环境中，优先用 navigator.share 分享；不可用时弹出大图预览让用户长按保存，避免 <a download> 闪退
 function downloadImage(canvas, pageTitle) {
     var fileName = (pageTitle || '账单') + '_' + new Date().toISOString().split('T')[0] + '.png';
 
@@ -2234,12 +2234,12 @@ function downloadImage(canvas, pageTitle) {
             navigator.share({ files: [file], title: pageTitle || '账单' }).then(function() {
                 showToast('已分享/保存图片', 'success');
             }).catch(function(e) {
-                // 用户取消或分享失败，回退到下载
-                console.log('分享取消，回退下载:', e.message);
+                // 用户取消或分享失败，回退到预览（TWA）或下载（普通浏览器）
+                console.log('分享取消，回退处理:', e.message);
                 fallbackDownload(url, fileName, isTwa);
             });
         }
-        // 方案2：普通 <a download> 下载（非WebView环境）
+        // 方案2：普通 <a download> 下载（非WebView环境），或 TWA 中弹出预览
         else {
             fallbackDownload(url, fileName, isTwa);
         }
@@ -2248,8 +2248,14 @@ function downloadImage(canvas, pageTitle) {
     }, 'image/png', 0.92);
 }
 
-// 普通下载回退
+// 普通下载回退：TWA环境弹出大图预览让用户长按保存，普通浏览器用 <a download>
 function fallbackDownload(url, fileName, isTwa) {
+    if (isTwa) {
+        // TWA/WebView：弹出全屏图片预览，用户长按可保存到相册，避免 <a download> 闪退
+        showTwaImagePreview(url, fileName);
+        return;
+    }
+    // 普通浏览器：正常 <a download>
     var link = document.createElement('a');
     link.download = fileName;
     link.href = url;
@@ -2257,12 +2263,35 @@ function fallbackDownload(url, fileName, isTwa) {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
-    if (isTwa) {
-        // TWA下<a download>可能不触发，提示用户长按或换浏览器
-        showToast('若未开始下载，请长按图片或使用浏览器打开', 'info');
-    } else {
-        showToast('图片已下载', 'success');
-    }
+    showToast('图片已下载', 'success');
+}
+
+// 弹出全屏图片预览（TWA 环境用，让用户长按保存到相册）
+function showTwaImagePreview(url, fileName) {
+    // 创建遮罩层
+    var overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.92);z-index:999999;display:flex;flex-direction:column;align-items:center;justify-content:center;';
+    // 关闭按钮
+    var closeBtn = document.createElement('button');
+    closeBtn.textContent = '✕ 关闭';
+    closeBtn.style.cssText = 'position:absolute;top:16px;right:16px;padding:8px 16px;background:rgba(255,255,255,0.2);color:#fff;border:none;border-radius:8px;font-size:14px;cursor:pointer;';
+    closeBtn.onclick = function() { document.body.removeChild(overlay); };
+    // 提示文字
+    var tip = document.createElement('p');
+    tip.textContent = '长按下方图片，选择「保存图片」即可保存到相册';
+    tip.style.cssText = 'color:#fff;font-size:13px;margin:0 0 12px 0;text-align:center;padding:0 20px;';
+    // 图片
+    var img = document.createElement('img');
+    img.src = url;
+    img.style.cssText = 'max-width:92%;max-height:78%;object-fit:contain;border-radius:6px;box-shadow:0 4px 20px rgba(0,0,0,0.5);background:#fff;';
+    img.onerror = function() {
+        closeBtn.textContent = '✕ 关闭';
+    };
+    overlay.appendChild(closeBtn);
+    overlay.appendChild(tip);
+    overlay.appendChild(img);
+    document.body.appendChild(overlay);
+    showToast('长按图片保存到相册', 'info');
 }
 
 // 导出当前筛选账单（详情弹窗用）
@@ -2572,6 +2601,13 @@ function exportAllData() {
 
 // 数据文件下载回退
 function downloadBlobFallback(url, fileName) {
+    var isTwa = /android|webview/i.test(navigator.userAgent) || window.twa || (window.cordova);
+    if (isTwa) {
+        // TWA环境：直接提示，避免 <a download> 闪退（JSON无法长按保存，提示用户用浏览器导出）
+        showToast('APP内不支持导出JSON文件，请在浏览器版中操作', 'error');
+        URL.revokeObjectURL(url);
+        return;
+    }
     var a = document.createElement('a');
     a.href = url;
     a.download = fileName;
