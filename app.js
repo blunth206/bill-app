@@ -94,11 +94,11 @@ function _migrateFromLocalStorage() {
     });
 }
 
-// ==================== GitHub 云同步层（repo 文件存储，Token 内置） ====================
-// 🔑 内置默认 Token：首次使用自动应用，用户无需手动配置
-// 注意：Token 写死在代码中，若 APP 公开给他人使用请谨慎（网页源码可见 Token）
-var _SYNC_TOKEN = null;   // 运行时会优先使用内置 token，若用户设置了新的则用用户的
-var _BUILTIN_SYNC_TOKEN = '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';
+// ==================== GitHub 云同步层（repo 文件存储，用户手动配置 Token） ====================
+// Token 不写死代码中（避免 GitHub 自动撤销），由用户手动在设置页填写并保存到 IndexedDB。
+// 首次使用需在设置页「云同步」处粘贴 Token 并保存；换设备/换浏览器需重新填写一次。
+var _SYNC_TOKEN = null;   // 从 IndexedDB 读取
+var _BUILTIN_SYNC_TOKEN = null;   // 已移除内置 Token，避免 GitHub 自动撤销
 var _SYNC_SHA = null;       // 云端文件 SHA，用于更新
 var _SYNC_READY = false;    // 有 Token 才启用
 var _SYNC_TIMER = null;
