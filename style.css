@@ -1425,8 +1425,8 @@ body {
 }
 
 .preview-table-wrap {
-    max-height: 250px;
-    overflow-y: auto;
+    /* 不限制高度，列表自然延伸，整体页面靠外层滚动条 */
+    overflow-y: visible;
     border: 1px solid var(--border);
     border-radius: 8px;
 }

@@ -224,6 +224,7 @@ function syncPush(retryCount) {
         billUsers: APP_DATA.billUsers,
         bills: APP_DATA.bills,
         deletedBills: JSON.parse(JSON.stringify(_deletedBills)), // 跨设备删除传播
+        boxTemplates: typeof _boxTemplates !== 'undefined' ? _boxTemplates : [], // 框选模板同步到云端
         updatedAt: new Date().toISOString()
     };
     var content = JSON.stringify(syncData);
@@ -487,6 +488,29 @@ function syncPull() {
         APP_DATA.billUsers = Object.values(localUserMap);
         // 去重：同名账单户清理多设备同步产生的重复
         dedupBillUsers();
+        // 合并框选模板（多设备同步）
+        if (cloudData.boxTemplates && Array.isArray(cloudData.boxTemplates)) {
+            var localTpls = typeof _boxTemplates !== 'undefined' ? _boxTemplates : [];
+            var localTplNames = {};
+            localTpls.forEach(function(t) { localTplNames[t.name] = t; });
+            cloudData.boxTemplates.forEach(function(ct) {
+                if (!ct || !ct.name) return;
+                if (!localTplNames[ct.name]) {
+                    localTpls.push(ct);
+                } else {
+                    // 同名：取 createdAt 较大的（更新的覆盖旧的）
+                    var localTpl = localTplNames[ct.name];
+                    if ((ct.createdAt || '') > (localTpl.createdAt || '')) {
+                        var idx = localTpls.indexOf(localTpl);
+                        localTpls[idx] = ct;
+                    }
+                }
+            });
+            _boxTemplates = localTpls;
+            _IDB.setItem('billApp_boxTemplates', JSON.stringify(_boxTemplates));
+            if (typeof refreshBoxTemplateSelect === 'function') refreshBoxTemplateSelect();
+            console.log('[同步] 合并框选模板: 共' + localTpls.length + '个');
+        }
         _LAST_SYNC_HASH = hash;
         saveDataSilent();
         var newBills = APP_DATA.bills.length;
@@ -3163,10 +3187,38 @@ function clearPasteContent() {
 }
 
 function handlePastedContent() {
+    // 立即显示处理中状态（让用户看到按钮在工作）
+    var btn = document.querySelector('button[onclick="handlePastedContent()"]');
+    var oldText = btn ? btn.textContent : '';
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = '⏳ 解析中...';
+        btn.style.opacity = '0.6';
+    }
+
+    var restore = function() {
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = oldText || '🔍 解析粘贴内容';
+            btn.style.opacity = '1';
+        }
+    };
+
     if (window._pastedType === 'image' && window._pastedBlob) {
         processImageOCR(window._pastedBlob);
+        // OCR 是异步的，3秒后兜底恢复（识别结果/失败会有 UI 反馈）
+        setTimeout(restore, 3000);
     } else if (window._pastedType === 'text' && window._pastedText) {
-        parseTextContent(window._pastedText, '粘贴内容');
+        try {
+            parseTextContent(window._pastedText, '粘贴内容');
+        } finally {
+            // 文本解析是同步的，finally中立刻恢复
+            restore();
+        }
+    } else {
+        // 没有粘贴内容
+        restore();
+        showToast('请先粘贴截图或账单文字', 'error');
     }
 }
 
@@ -3641,14 +3693,14 @@ function showPreview(bills, userId) {
         var amountClass = b.type === '收入' ? 'amount-income' : (b.type === '结余' ? 'amount-balance' : 'amount-expense');
         html += '<tr class="' + dupClass + '">' +
             (window._batchDateMode ? '<td style="text-align:center;"><input type="checkbox" class="batch-date-check" data-idx="' + idx + '"></td>' : '') +
-            '<td><input type="date" class="preview-date-input" value="' + b.date + '" data-idx="' + idx + '" onchange="updatePreviewDate(' + idx + ', this.value);recheckDuplicates();">' + dateBadge + '</td>' +
-            '<td><select class="preview-type-select" onchange="updatePreviewType(' + idx + ', this.value);recheckDuplicates();">' +
+            '<td><input type="date" class="preview-date-input" value="' + b.date + '" data-idx="' + idx + '" onchange="updatePreviewDate(' + idx + ', this.value);recheckDuplicates();" onkeydown="handlePreviewDateKeydown(event, this, ' + idx + ');">' + dateBadge + '</td>' +
+            '<td><select class="preview-type-select" onchange="updatePreviewType(' + idx + ', this.value);recheckDuplicates();" onkeydown="handlePreviewTypeKeydown(event, this, ' + idx + ');">' +
             '<option value="支出"' + (b.type === '支出' ? ' selected' : '') + '>支出</option>' +
             '<option value="收入"' + (b.type === '收入' ? ' selected' : '') + '>收入</option>' +
             '<option value="结余"' + (b.type === '结余' ? ' selected' : '') + '>结余</option>' +
             '</select></td>' +
             '<td class="' + amountClass + '"><input type="text" inputmode="decimal" class="preview-amount-input" value="' + b.amount + '" data-idx="' + idx + '" data-orig="' + b.amount + '" onchange="updatePreviewAmount(' + idx + ', this.value);recheckDuplicates();" onblur="handleAmountBlur(this, ' + idx + ');" onkeydown="handleAmountKeydown(event, this, ' + idx + ');">' + amountBadge + '</td>' +
-            '<td><input type="text" class="preview-note-input" value="' + (b.note || '') + '" data-idx="' + idx + '" onchange="updatePreviewNote(' + idx + ', this.value);recheckDuplicates();">' + noteBadge + dupIcon + '</td>' +
+            '<td><input type="text" class="preview-note-input" value="' + (b.note || '') + '" data-idx="' + idx + '" onchange="updatePreviewNote(' + idx + ', this.value);recheckDuplicates();" onkeydown="handlePreviewNoteKeydown(event, this, ' + idx + ');">' + noteBadge + dupIcon + '</td>' +
             '<td style="white-space:nowrap;">' +
             '<button class="btn-learn-save" onclick="saveAsLearningRule(' + idx + ', this)" title="记住此次修正，下次同款截屏自动识别">📘</button>' +
             '<button class="btn-del-row" onclick="deletePreviewRow(' + idx + ')" title="删除此行" style="background:none;border:none;cursor:pointer;font-size:18px;padding:4px 8px;color:#999;border-radius:4px;">&times;</button></td>' +
@@ -4082,6 +4134,34 @@ function handleAmountKeydown(e, input, idx) {
         // 非表达式或计算失败，按普通金额处理
         input.setAttribute('data-orig', input.value);
         updatePreviewAmount(idx, input.value);
+        if (typeof recheckDuplicates === 'function') recheckDuplicates();
+    }
+}
+
+// 日期输入框回车确认
+function handlePreviewDateKeydown(e, input, idx) {
+    if (e.key === 'Enter') {
+        e.preventDefault();
+        updatePreviewDate(idx, input.value);
+        if (typeof recheckDuplicates === 'function') recheckDuplicates();
+    }
+}
+
+// 类型下拉框回车确认（select 可选项用 Enter 确认）
+function handlePreviewTypeKeydown(e, sel, idx) {
+    if (e.key === 'Enter') {
+        e.preventDefault();
+        updatePreviewType(idx, sel.value);
+        if (typeof recheckDuplicates === 'function') recheckDuplicates();
+    }
+}
+
+// 备注输入框回车确认（失焦前锁定当前编辑值）
+function handlePreviewNoteKeydown(e, input, idx) {
+    if (e.key === 'Enter') {
+        e.preventDefault();
+        input.blur();
+        updatePreviewNote(idx, input.value);
         if (typeof recheckDuplicates === 'function') recheckDuplicates();
     }
 }
