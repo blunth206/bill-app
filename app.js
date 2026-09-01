@@ -789,6 +789,20 @@ function formatMoney(val) {
     return Number(val).toFixed(2);
 }
 
+// 统一汇总口径（全局唯一）：
+//   总收入 = 所有「收入」记录金额之和 + 所有「结余」记录金额之和（结余视同收入）
+//   总支出 = 所有「支出」记录金额之和
+//   总结余 = 总收入 - 总支出
+function calcTotals(bills) {
+    var income = 0, expense = 0;
+    (bills || []).forEach(function(b) {
+        var amt = Number(b.amount) || 0;
+        if (b.type === '收入' || b.type === '结余') income += amt;
+        else expense += amt;
+    });
+    return { income: income, expense: expense, balance: income - expense };
+}
+
 function formatDate(dateStr) {
     if (!dateStr) return '';
     var d = new Date(dateStr);
@@ -1203,25 +1217,17 @@ function renderHomeView() {
 
     // 计算当年数据（受账单户影响，不受时间模式影响）
     var currentYear = new Date().getFullYear().toString();
-    var yearIncome = 0, yearExpense = 0, yearBalance = 0;
-    APP_DATA.bills.forEach(function(b) {
-        if (b.date >= currentYear + '-01-01' && b.date <= currentYear + '-12-31') {
-            if (filterUser !== 'all' && b.userId !== filterUser) return;
-            if (b.type === '收入') yearIncome += b.amount;
-            else if (b.type === '结余') yearBalance += b.amount;
-            else yearExpense += b.amount;
-        }
+    var yearBills = APP_DATA.bills.filter(function(b) {
+        if (b.date < currentYear + '-01-01' || b.date > currentYear + '-12-31') return false;
+        if (filterUser !== 'all' && b.userId !== filterUser) return false;
+        return true;
     });
-    var yearTotalBalance = yearBalance + yearIncome - yearExpense;
+    var yearSum = calcTotals(yearBills);
+    var yearIncome = yearSum.income, yearExpense = yearSum.expense, yearTotalBalance = yearSum.balance;
 
-    // 计算当前视图筛选汇总（受账单户+时间模式双重影响）
-    var totalIncome = 0, totalExpense = 0, totalBalance = 0;
-    filtered.forEach(function(b) {
-        if (b.type === '收入') totalIncome += b.amount;
-        else if (b.type === '结余') totalBalance += b.amount;
-        else totalExpense += b.amount;
-    });
-    var balance = totalBalance + totalIncome - totalExpense;
+    // 当前视图筛选汇总（受账单户+时间模式双重影响）
+    var viewSum = calcTotals(filtered);
+    var totalIncome = viewSum.income, totalExpense = viewSum.expense, balance = viewSum.balance;
 
     // 判断是否有时间筛选（按月/按年/按日/自定义造成数据范围缩小）
     var hasTimeFilter = (dateFrom !== '' || dateTo !== '');
@@ -1820,7 +1826,8 @@ function exportAsPDF() {
         return;
     }
 
-    var totalIncome = 0, totalExpense = 0, totalBalance = 0;
+    var sum = calcTotals(bills);
+    var totalIncome = sum.income, totalExpense = sum.expense;
     var rows = '';
     bills.forEach(function(b) {
         var user = APP_DATA.billUsers.find(function(u) { return u.id === b.userId; });
@@ -1834,9 +1841,6 @@ function exportAsPDF() {
             '<td>' + (b.note || '-') + '</td>' +
             '<td>' + (b.source || '') + '</td>' +
             '</tr>';
-        if (b.type === '收入') totalIncome += b.amount;
-        else if (b.type === '结余') totalBalance += b.amount;
-        else totalExpense += b.amount;
     });
 
     printWindow.document.write('<!DOCTYPE html><html><head><meta charset="UTF-8"><title>账单导出</title>' +
@@ -1853,7 +1857,7 @@ function exportAsPDF() {
         '<div class="summary">' +
         '<span>总收入：¥' + totalIncome.toFixed(2) + '</span>' +
         '<span>总支出：¥' + totalExpense.toFixed(2) + '</span>' +
-        '<span>总结余：¥' + (totalBalance + totalIncome - totalExpense).toFixed(2) + '</span>' +
+        '<span>总结余：¥' + (totalIncome - totalExpense).toFixed(2) + '</span>' +
         '</div>' +
         '<table><thead><tr><th>日期</th><th>账单户</th><th>类型</th><th>金额</th><th>备注</th><th>来源</th></tr></thead>' +
         '<tbody>' + rows + '</tbody></table>' +
@@ -1878,25 +1882,17 @@ function exportAsImage(downloadOnly) {
     // 计算当年总额（受账单户影响，不受时间模式影响）
     var filterUser = document.getElementById('homeUserFilter').value;
     var currentYear = new Date().getFullYear().toString();
-    var yearIncome = 0, yearExpense = 0, yearBalance = 0;
-    APP_DATA.bills.forEach(function(b) {
-        if (b.date >= currentYear + '-01-01' && b.date <= currentYear + '-12-31') {
-            if (filterUser !== 'all' && b.userId !== filterUser) return;
-            if (b.type === '收入') yearIncome += b.amount;
-            else if (b.type === '结余') yearBalance += b.amount;
-            else yearExpense += b.amount;
-        }
+    var yearBills = APP_DATA.bills.filter(function(b) {
+        if (b.date < currentYear + '-01-01' || b.date > currentYear + '-12-31') return false;
+        if (filterUser !== 'all' && b.userId !== filterUser) return false;
+        return true;
     });
-    var yearTotalBalance = yearBalance + yearIncome - yearExpense;
+    var yearSum = calcTotals(yearBills);
+    var yearIncome = yearSum.income, yearExpense = yearSum.expense, yearTotalBalance = yearSum.balance;
 
     // 计算当前视图筛选汇总（用于对比）
-    var totalIncome = 0, totalExpense = 0, totalBalance = 0;
-    bills.forEach(function(b) {
-        if (b.type === '收入') totalIncome += b.amount;
-        else if (b.type === '结余') totalBalance += b.amount;
-        else totalExpense += b.amount;
-    });
-    var balance = totalBalance + totalIncome - totalExpense;
+    var viewSum = calcTotals(bills);
+    var totalIncome = viewSum.income, totalExpense = viewSum.expense, balance = viewSum.balance;
 
     // 构建临时渲染容器
     var container = document.createElement('div');
@@ -2885,13 +2881,8 @@ function renderBillUserGrid() {
         var html = '';
         APP_DATA.billUsers.forEach(function(u) {
             // 统计该账单户的数据
-            var income = 0, expense = 0;
-            APP_DATA.bills.forEach(function(b) {
-                if (b.userId === u.id) {
-                    if (b.type === '收入') income += b.amount;
-                    else if (b.type !== '结余') expense += b.amount;
-                }
-            });
+            var uSum = calcTotals(APP_DATA.bills.filter(function(b) { return b.userId === u.id; }));
+            var income = uSum.income, expense = uSum.expense;
             html += '<div class="user-card">' +
                 '<div class="user-avatar" style="background:' + u.color + ';">' + u.name.charAt(0) + '</div>' +
                 '<div class="user-name">' + u.name + '</div>' +
