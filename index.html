@@ -56,7 +56,8 @@
     })();
     </script>
     <script>
-        if ('serviceWorker' in navigator) { navigator.serviceWorker.register('sw.js?v=10').catch(() => {}); }
+        // 注册版本号需与 sw.js 的 CACHE_NAME 同步，升级时一并修改，确保浏览器拉取到最新 SW
+        if ('serviceWorker' in navigator) { navigator.serviceWorker.register('sw.js?v=39').catch(() => {}); }
         (function removeSafetyBanner() {
             const observer = new MutationObserver(function() {
                 const banners = document.querySelectorAll('div[style*="fixed"]');

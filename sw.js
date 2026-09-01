@@ -113,29 +113,20 @@ self.addEventListener('fetch', (event) => {
   }
 
   if (isCore) {
-    // 核心文件：缓存优先，网络静默更新（stale-while-revalidate）
-    // 即使用户网络不通也能秒开，下次联网时自动更新
+    // 核心文件（app.js/index.html/style.css 等）：网络优先，失败/超时才回退缓存
+    // 保证联网时用户刷新一次即可拿到最新代码（修复能立刻生效），断网弱网时仍可离线打开
     event.respondWith(
-      caches.match(event.request).then((cached) => {
-        // 后台尝试网络更新缓存
-        const networkUpdate = fetchWithTimeout(event.request, 5000).then((response) => {
-          if (response && response.ok) {
-            const clone = response.clone();
-            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
-          }
+      fetchWithTimeout(event.request, 5000).then((response) => {
+        if (response && response.ok) {
+          const clone = response.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
           return response;
-        }).catch(() => null);
-
-        // 如果有缓存，立即返回缓存，同时后台静默更新
-        if (cached) {
-          networkUpdate; // 不await，纯后台
-          return cached;
         }
-
-        // 首次访问、无缓存，等待网络结果
-        return networkUpdate.then((networkRes) => {
-          return networkRes || cached;
-        });
+        // 网络返回异常状态，回退缓存
+        return caches.match(event.request);
+      }).catch(() => {
+        // 网络不通/超时，回退缓存保证离线可用
+        return caches.match(event.request);
       })
     );
   } else {
