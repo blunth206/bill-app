@@ -57,7 +57,7 @@
     </script>
     <script>
         // 注册版本号需与 sw.js 的 CACHE_NAME 同步，升级时一并修改，确保浏览器拉取到最新 SW
-        if ('serviceWorker' in navigator) { navigator.serviceWorker.register('sw.js?v=40').catch(() => {}); }
+        if ('serviceWorker' in navigator) { navigator.serviceWorker.register('sw.js?v=41').catch(() => {}); }
         (function removeSafetyBanner() {
             const observer = new MutationObserver(function() {
                 const banners = document.querySelectorAll('div[style*="fixed"]');
