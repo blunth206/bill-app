@@ -1832,7 +1832,7 @@ function exportAsPDF() {
     bills.forEach(function(b) {
         var user = APP_DATA.billUsers.find(function(u) { return u.id === b.userId; });
         var userName = user ? user.name : '';
-        var typeClass = b.type === '收入' ? 'color:#00b894' : (b.type === '结余' ? 'color:#4A90D9' : 'color:#e17055');
+        var typeClass = (b.type === '收入' || b.type === '结余') ? 'color:#00b894' : 'color:#e17055';
         rows += '<tr>' +
             '<td>' + b.date + '</td>' +
             '<td>' + userName + '</td>' +
@@ -1879,20 +1879,13 @@ function exportAsImage(downloadOnly) {
 
     showToast('正在生成图片...', 'info');
 
-    // 计算当年总额（受账单户影响，不受时间模式影响）
     var filterUser = document.getElementById('homeUserFilter').value;
-    var currentYear = new Date().getFullYear().toString();
-    var yearBills = APP_DATA.bills.filter(function(b) {
-        if (b.date < currentYear + '-01-01' || b.date > currentYear + '-12-31') return false;
-        if (filterUser !== 'all' && b.userId !== filterUser) return false;
-        return true;
-    });
-    var yearSum = calcTotals(yearBills);
-    var yearIncome = yearSum.income, yearExpense = yearSum.expense, yearTotalBalance = yearSum.balance;
 
-    // 计算当前视图筛选汇总（用于对比）
+    // 汇总口径 = 本次导出的账单（bills），保证图片中汇总数字与下方表格逐条一致、可核对
     var viewSum = calcTotals(bills);
     var totalIncome = viewSum.income, totalExpense = viewSum.expense, balance = viewSum.balance;
+    // 汇总卡片直接复用导出记录的汇总（保持下游函数签名不变）
+    var yearIncome = totalIncome, yearExpense = totalExpense, yearTotalBalance = balance;
 
     // 构建临时渲染容器
     var container = document.createElement('div');
@@ -1923,28 +1916,21 @@ function exportAsImage(downloadOnly) {
     html += '<p style="margin:0;color:#666;font-size:16px;">' + subInfo + dateRangeStr + '</p>';
     html += '</div>';
 
-    // 汇总卡片（当年总额，受账单户影响不受时间影响）
+    // 汇总卡片（口径 = 下方表格中的全部记录）
     html += '<div style="display:flex;gap:12px;margin-bottom:12px;">';
     html += '<div style="flex:1;padding:14px;border-radius:10px;background:linear-gradient(135deg,#e8f5e9,#f1f8e9);text-align:center;">';
-    html += '<div style="font-size:12px;color:#666;margin-bottom:4px;">收入（当年）</div>';
-    html += '<div style="font-size:24px;font-weight:bold;color:#00b894;">¥' + yearIncome.toFixed(2) + '</div>';
+    html += '<div style="font-size:12px;color:#666;margin-bottom:4px;">总收入</div>';
+    html += '<div style="font-size:24px;font-weight:bold;color:#00b894;">¥' + totalIncome.toFixed(2) + '</div>';
     html += '</div>';
     html += '<div style="flex:1;padding:14px;border-radius:10px;background:linear-gradient(135deg,#fff3e0,#fce4ec);text-align:center;">';
-    html += '<div style="font-size:12px;color:#666;margin-bottom:4px;">支出（当年）</div>';
-    html += '<div style="font-size:24px;font-weight:bold;color:#e17055;">¥' + yearExpense.toFixed(2) + '</div>';
+    html += '<div style="font-size:12px;color:#666;margin-bottom:4px;">总支出</div>';
+    html += '<div style="font-size:24px;font-weight:bold;color:#e17055;">¥' + totalExpense.toFixed(2) + '</div>';
     html += '</div>';
     html += '<div style="flex:1;padding:14px;border-radius:10px;background:linear-gradient(135deg,#e3f2fd,#e8eaf6);text-align:center;">';
-    html += '<div style="font-size:12px;color:#666;margin-bottom:4px;">总结余（当年）</div>';
-    html += '<div style="font-size:24px;font-weight:bold;color:' + (yearTotalBalance >= 0 ? '#00b894' : '#e17055') + ';">¥' + yearTotalBalance.toFixed(2) + '</div>';
+    html += '<div style="font-size:12px;color:#666;margin-bottom:4px;">总结余</div>';
+    html += '<div style="font-size:24px;font-weight:bold;color:' + (balance >= 0 ? '#00b894' : '#e17055') + ';">¥' + balance.toFixed(2) + '</div>';
     html += '</div>';
     html += '</div>';
-
-    // 筛选小字：时间模式数据与年总额不同时展示
-    if (yearTotalBalance !== balance || yearIncome !== totalIncome || yearExpense !== totalExpense) {
-        html += '<div style="text-align:center;font-size:12px;color:#888;margin-bottom:12px;white-space:nowrap;">';
-        html += '筛选结果：收入 ¥' + totalIncome.toFixed(2) + ' · 支出 ¥' + totalExpense.toFixed(2) + ' · 结余 ¥' + balance.toFixed(2);
-        html += '</div>';
-    }
 
     // 账单表格
     html += '<table style="width:100%;border-collapse:collapse;font-size:13px;">';
@@ -1957,7 +1943,7 @@ function exportAsImage(downloadOnly) {
     
     bills.forEach(function(b, idx) {
         var bg = idx % 2 === 0 ? '#fafafa' : '#fff';
-        var typeColor = b.type === '收入' ? '#00b894' : (b.type === '结余' ? '#4A90D9' : '#e17055');
+        var typeColor = (b.type === '收入' || b.type === '结余') ? '#00b894' : '#e17055';
         html += '<tr style="background:' + bg + ';">';
         html += '<td style="padding:6px 10px;border:1px solid #e0e0e0;">' + b.date + '</td>';
         html += '<td style="padding:6px 10px;border:1px solid #e0e0e0;color:' + typeColor + ';font-weight:600;">' + b.type + '</td>';
@@ -2032,10 +2018,7 @@ function exportAsImageCanvas(container, bills, pageTitle, yearIncome, yearExpens
     // 预计算高度
     var headerH = 80;   // 标题区域
     var summaryH = 100; // 汇总卡片
-    var filterH = 0;    // 筛选行
-    if (yearTotalBalance !== balance || yearIncome !== totalIncome || yearExpense !== totalExpense) {
-        filterH = 30;
-    }
+    var filterH = 0;    // 筛选行（汇总已与表格口径一致，无需再单独展示筛选小计）
     var tableHeaderH = 36;
     var rowH = 36;
     var tableH = tableHeaderH + bills.length * rowH;
@@ -2083,9 +2066,9 @@ function exportAsImageCanvas(container, bills, pageTitle, yearIncome, yearExpens
     var cardW = Math.floor(contentW / 3) - 8;
     var cardX = [PAD, PAD + cardW + 12, PAD + (cardW + 12) * 2];
     var cardData = [
-        { label: '收入（当年）', value: yearIncome, color: '#00b894' },
-        { label: '支出（当年）', value: yearExpense, color: '#e17055' },
-        { label: '总结余（当年）', value: yearTotalBalance, color: yearTotalBalance >= 0 ? '#00b894' : '#e17055' }
+        { label: '总收入', value: totalIncome, color: '#00b894' },
+        { label: '总支出', value: totalExpense, color: '#e17055' },
+        { label: '总结余', value: balance, color: balance >= 0 ? '#00b894' : '#e17055' }
     ];
     var cardTop = y;
     cardData.forEach(function(cd, i) {
@@ -2168,8 +2151,8 @@ function exportAsImageCanvas(container, bills, pageTitle, yearIncome, yearExpens
         ctx.textAlign = 'center';
         ctx.fillText(b.date, colX[0] + colW[1] / 2, rowY + 25);
 
-        // 类型
-        var tc = b.type === '收入' ? '#00b894' : (b.type === '结余' ? '#4A90D9' : '#e17055');
+        // 类型（结余统计上计入收入，同色显示，避免与汇总卡片口径产生歧义）
+        var tc = (b.type === '收入' || b.type === '结余') ? '#00b894' : '#e17055';
         ctx.fillStyle = tc;
         ctx.fillText(b.type, colX[1] + colW[2] / 2, rowY + 25);
 
