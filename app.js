@@ -5414,7 +5414,12 @@ function ocrTesseract(imageDataUrl, options) {
     options = options || {};
     var lang = 'chi_sim+eng';
     var psm = options.langMode === 'line' ? Tesseract.PSM.SINGLE_LINE : Tesseract.PSM.SINGLE_BLOCK;
+    // 显式指定 worker/core/lang 路径，避免默认走 cdn.jsdelivr.net
+    // （国内网络常被重置 → 弹出 importScripts NetworkError）。改用 unpkg 主源。
     return Tesseract.recognize(imageDataUrl, lang, {
+        workerPath: 'https://unpkg.com/tesseract.js@5.1.1/dist/worker.min.js',
+        corePath:   'https://unpkg.com/tesseract.js-core@5.1.1',
+        langPath:   'https://tessdata.projectnaptha.com/4.0.0',
         tessedit_pageseg_mode: psm,
         logger: options.logger || function() {}
     }).then(function(result) {
