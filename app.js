@@ -393,6 +393,17 @@ function syncPull() {
             updateSyncStatus('已连接');
             return false;
         }
+        // 防御：云端三大集合全为空（数据被清空/损坏）时，绝不覆盖本地，改用本地数据修复云端
+        var _cBills = (cloudData.bills || []).length;
+        var _cAcc = (cloudData.accounts || []).length;
+        var _cUsers = (cloudData.billUsers || []).length;
+        var _localTotal = APP_DATA.bills.length + APP_DATA.accounts.length + APP_DATA.billUsers.length;
+        if (_cBills === 0 && _cAcc === 0 && _cUsers === 0 && _localTotal > 0) {
+            console.warn('[同步] 云端数据为空/损坏，跳过覆盖，改用本地数据修复云端');
+            updateSyncStatus('已连接');
+            syncPush();
+            return false;
+        }
         var oldBills = APP_DATA.bills.length;
         _SYNC_SHA = fileInfo.sha;
         // 字段级合并账单
