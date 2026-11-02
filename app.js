@@ -3717,7 +3717,7 @@ function showPreview(bills, userId) {
             '<option value="收入"' + (b.type === '收入' ? ' selected' : '') + '>收入</option>' +
             '<option value="结余"' + (b.type === '结余' ? ' selected' : '') + '>结余</option>' +
             '</select></td>' +
-            '<td class="amount-cell ' + amountClass + '"><span class="amount-sign">' + amountSign + '</span><input type="text" inputmode="decimal" class="preview-amount-input" value="' + b.amount + '" data-idx="' + idx + '" data-orig="' + b.amount + '" onchange="updatePreviewAmount(' + idx + ', this.value);recheckDuplicates();" onblur="handleAmountBlur(this, ' + idx + ');" onkeydown="handleAmountKeydown(event, this, ' + idx + ');">' + amountBadge + '</td>' +
+            '<td class="amount-cell ' + amountClass + '"><input type="text" inputmode="decimal" class="preview-amount-input" value="' + amountSign + b.amount + '" data-idx="' + idx + '" data-orig="' + b.amount + '" onchange="updatePreviewAmount(' + idx + ', this.value);recheckDuplicates();" onblur="handleAmountBlur(this, ' + idx + ');" onkeydown="handleAmountKeydown(event, this, ' + idx + ');">' + amountBadge + '</td>' +
             '<td><input type="text" class="preview-note-input" value="' + (b.note || '') + '" data-idx="' + idx + '" onchange="updatePreviewNote(' + idx + ', this.value);recheckDuplicates();" onkeydown="handlePreviewNoteKeydown(event, this, ' + idx + ');">' + noteBadge + dupIcon + '</td>' +
             '<td style="white-space:nowrap;">' +
             '<button class="btn-learn-save" onclick="saveAsLearningRule(' + idx + ', this)" title="记住此次修正，下次同款截屏自动识别">📘</button>' +
@@ -4104,9 +4104,34 @@ function updatePreviewNote(idx, val) {
     }
 }
 
+// 金额正负号：支出 "-"，收入 "+"，结余不带符号
+function _amountSignOf(type) {
+    return type === '收入' ? '+' : (type === '结余' ? '' : '-');
+}
+
+// 去掉输入框显示值开头的正负号（金额本身始终按绝对值保存）
+function _stripAmountSign(v) {
+    return String(v == null ? '' : v).replace(/^[+\-\u2212\s]+/, '');
+}
+
+// 按当前行的类型给金额输入框补上正负号（值写进输入框内，符号与数字天然紧贴）
+function _applyAmountSignToInput(input, idx) {
+    if (!input) return;
+    var bill = window._previewBills && window._previewBills[idx];
+    var type = bill ? bill.type : '支出';
+    var raw = _stripAmountSign(input.value).trim();
+    if (raw === '' || raw === '=' || !/[0-9]/.test(raw)) {
+        raw = (bill && bill.amount !== undefined && bill.amount !== null) ? String(bill.amount) : '';
+        if (raw === '') return;
+    }
+    input.value = _amountSignOf(type) + raw;
+    input.setAttribute('data-orig', raw);
+}
+
 function updatePreviewAmount(idx, val) {
+    // 输入框里带正负号（如 "-787.50"），解析前先去掉
+    var strVal = _stripAmountSign(val).trim();
     // 支持内联计算表达式：=125-114 自动计算结果
-    var strVal = String(val).trim();
     if (strVal.startsWith('=') && strVal.length > 1) {
         strVal = evalAmountExpr(strVal.substring(1));
     }
@@ -4132,7 +4157,7 @@ function evalAmountExpr(expr) {
 function handleAmountKeydown(e, input, idx) {
     if (e.key === 'Enter') {
         e.preventDefault();
-        var val = input.value.trim();
+        var val = _stripAmountSign(input.value).trim();
         if (val.startsWith('=') && val.length > 1) {
             var expr = val.substring(1);
             if (/^[0-9+\-*/.() ]+$/.test(expr)) {
@@ -4143,6 +4168,7 @@ function handleAmountKeydown(e, input, idx) {
                         input.value = result;
                         input.setAttribute('data-orig', result);
                         updatePreviewAmount(idx, result);
+                        _applyAmountSignToInput(input, idx);
                         if (typeof recheckDuplicates === 'function') recheckDuplicates();
                         return;
                     }
@@ -4152,6 +4178,7 @@ function handleAmountKeydown(e, input, idx) {
         // 非表达式或计算失败，按普通金额处理
         input.setAttribute('data-orig', input.value);
         updatePreviewAmount(idx, input.value);
+        _applyAmountSignToInput(input, idx);
         if (typeof recheckDuplicates === 'function') recheckDuplicates();
     }
 }
@@ -4192,7 +4219,7 @@ function handlePreviewNoteKeydown(e, input, idx) {
 }
 
 // 金额输入框失去焦点：= 表达式无效时回退到原值
-function handleAmountBlur(input, idx) {
+function _handleAmountBlurCore(input, idx) {
     var val = String(input.value).trim();
     if (val === '=' || val === '') {
         // 空了或只有=号，回退到原始值
@@ -4239,6 +4266,12 @@ function handleAmountBlur(input, idx) {
     input.setAttribute('data-orig', val);
 }
 
+// 失焦后统一补齐正负号（支出 "-"、收入 "+"、结余无符号）
+function handleAmountBlur(input, idx) {
+    _handleAmountBlurCore(input, idx);
+    _applyAmountSignToInput(input, idx);
+}
+
 function updatePreviewType(idx, val) {
     if (window._previewBills && window._previewBills[idx]) {
         window._previewBills[idx].type = val;
@@ -4252,8 +4285,8 @@ function updatePreviewType(idx, val) {
     if (!cell) return;
     cell.classList.remove('amount-income', 'amount-expense', 'amount-balance');
     cell.classList.add(val === '收入' ? 'amount-income' : (val === '结余' ? 'amount-balance' : 'amount-expense'));
-    var signEl = cell.querySelector('.amount-sign');
-    if (signEl) signEl.textContent = val === '收入' ? '+' : (val === '结余' ? '' : '-');
+    var amtInput = cell.querySelector('.preview-amount-input');
+    if (amtInput) _applyAmountSignToInput(amtInput, idx);
 }
 
 function deletePreviewRow(idx) {
@@ -4430,9 +4463,12 @@ function calcFill() {
     if (isNaN(num)) return;
     var input = window._calcLastFocusedInput;
     if (input && document.contains(input)) {
+        var calcIdx = parseInt(input.getAttribute('data-idx'));
         input.value = num;
         // 触发 change 事件以更新预览数据
         input.dispatchEvent(new Event('change', { bubbles: true }));
+        // 补齐正负号（符号显示在输入框内）
+        if (!isNaN(calcIdx)) _applyAmountSignToInput(input, calcIdx);
         showToast('已填入金额: ' + num, 'success');
     } else {
         showToast('请先点击预览中的金额输入框', 'info');
@@ -5949,6 +5985,22 @@ function parseWeChatBill(lines, today, currentYear) {
     return bills;
 }
 
+// ============================================================
+// 无效信息判定：备注是解析器的占位默认值，说明这一行根本没识别到真实交易内容
+// （典型表现：把界面按钮文字 / 零散数字当成一条账单，如 "OCR识别" + 孤立金额 60）
+// ============================================================
+var NOISE_NOTE_VALUES = ['OCR识别', '框选识别', '账户明细', '银行交易', '识别', '未知', '无效', '无'];
+function isNoiseBill(b) {
+    if (!b) return true;
+    var note = String(b.note || '').replace(/\s+/g, '');
+    if (!note) return true;
+    if (NOISE_NOTE_VALUES.indexOf(note) !== -1) return true;
+    if (/ocr识别/i.test(note)) return true;
+    // 备注里只有数字/货币符号/运算符，也是误识别产物
+    if (/^[0-9.,¥￥$+\-*/]+$/.test(note)) return true;
+    return false;
+}
+
 // 解析器2：支付宝账单列表
 function parseAlipayBill(lines, today, currentYear) {
     var bills = [];
@@ -6797,6 +6849,25 @@ function parseOCRText(text, userId, preDetectedType) {
         }
         bills = filteredBills;
         console.log('[OCR v2.5] 全局过滤后剩余:', bills.length, '条');
+
+        // 第5步：屏蔽无效信息（占位备注 = 该行没识别到真实交易内容）
+        var noiseRemoved = 0;
+        var cleanBills = [];
+        for (var nbi = 0; nbi < bills.length; nbi++) {
+            if (isNoiseBill(bills[nbi])) {
+                console.log('[OCR] 屏蔽无效行: ' + bills[nbi].date + ' | ' + bills[nbi].type + ' | ' + bills[nbi].amount + ' | ' + bills[nbi].note);
+                noiseRemoved++;
+                continue;
+            }
+            cleanBills.push(bills[nbi]);
+        }
+        if (cleanBills.length > 0) {
+            bills = cleanBills;
+        }
+        if (noiseRemoved > 0 && cleanBills.length > 0) {
+            setTimeout(function() { showToast('已自动屏蔽 ' + noiseRemoved + ' 条无效信息', 'info'); }, 400);
+        }
+        console.log('[OCR] 无效信息过滤后剩余:', bills.length, '条');
 
         // ---- 学习引擎自动修正（锁定模式跳过，保护精调结果） ----
         if (bills.length > 0) {
