@@ -3683,6 +3683,8 @@ function showPreview(bills, userId) {
         var amountBadge = learnFields.indexOf('金额') !== -1 ? ' <span class="learn-badge" title="学习引擎自动修正：金额">✨</span>' : '';
         var noteBadge = learnFields.indexOf('备注') !== -1 ? ' <span class="learn-badge" title="学习引擎自动修正：' + escapeHtml(b._learnField || '备注') + '">✨已修正</span>' : '';
         var amountClass = b.type === '收入' ? 'amount-income' : (b.type === '结余' ? 'amount-balance' : 'amount-expense');
+        // 金额正负号：支出显示 "-"，收入显示 "+"，结余不带符号
+        var amountSign = b.type === '收入' ? '+' : (b.type === '结余' ? '' : '-');
         html += '<tr class="' + dupClass + '">' +
             (window._batchDateMode ? '<td style="text-align:center;"><input type="checkbox" class="batch-date-check" data-idx="' + idx + '"></td>' : '') +
             '<td><input type="date" class="preview-date-input" value="' + b.date + '" data-idx="' + idx + '" onchange="updatePreviewDate(' + idx + ', this.value);recheckDuplicates();" onkeydown="handlePreviewDateKeydown(event, this, ' + idx + ');">' + dateBadge + '</td>' +
@@ -3691,7 +3693,7 @@ function showPreview(bills, userId) {
             '<option value="收入"' + (b.type === '收入' ? ' selected' : '') + '>收入</option>' +
             '<option value="结余"' + (b.type === '结余' ? ' selected' : '') + '>结余</option>' +
             '</select></td>' +
-            '<td class="' + amountClass + '"><input type="text" inputmode="decimal" class="preview-amount-input" value="' + b.amount + '" data-idx="' + idx + '" data-orig="' + b.amount + '" onchange="updatePreviewAmount(' + idx + ', this.value);recheckDuplicates();" onblur="handleAmountBlur(this, ' + idx + ');" onkeydown="handleAmountKeydown(event, this, ' + idx + ');">' + amountBadge + '</td>' +
+            '<td class="amount-cell ' + amountClass + '"><span class="amount-sign">' + amountSign + '</span><input type="text" inputmode="decimal" class="preview-amount-input" value="' + b.amount + '" data-idx="' + idx + '" data-orig="' + b.amount + '" onchange="updatePreviewAmount(' + idx + ', this.value);recheckDuplicates();" onblur="handleAmountBlur(this, ' + idx + ');" onkeydown="handleAmountKeydown(event, this, ' + idx + ');">' + amountBadge + '</td>' +
             '<td><input type="text" class="preview-note-input" value="' + (b.note || '') + '" data-idx="' + idx + '" onchange="updatePreviewNote(' + idx + ', this.value);recheckDuplicates();" onkeydown="handlePreviewNoteKeydown(event, this, ' + idx + ');">' + noteBadge + dupIcon + '</td>' +
             '<td style="white-space:nowrap;">' +
             '<button class="btn-learn-save" onclick="saveAsLearningRule(' + idx + ', this)" title="记住此次修正，下次同款截屏自动识别">📘</button>' +
@@ -4134,8 +4136,15 @@ function handleAmountKeydown(e, input, idx) {
 function handlePreviewDateKeydown(e, input, idx) {
     if (e.key === 'Enter') {
         e.preventDefault();
-        updatePreviewDate(idx, input.value);
+        var val = (input.value || '').trim();
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(val)) {
+            showToast('日期还不完整，请选择完整日期后再回车', 'warning');
+            return;
+        }
+        updatePreviewDate(idx, val);
         if (typeof recheckDuplicates === 'function') recheckDuplicates();
+        input.blur();
+        showToast('日期已更新：' + val, 'success');
     }
 }
 
@@ -4210,6 +4219,17 @@ function updatePreviewType(idx, val) {
     if (window._previewBills && window._previewBills[idx]) {
         window._previewBills[idx].type = val;
     }
+    // 类型改变后立即同步该行金额的显示颜色与正负号（不重绘整表，避免输入框失焦）
+    var tbody = document.getElementById('previewTbody');
+    if (!tbody) return;
+    var row = tbody.querySelectorAll('tr')[idx];
+    if (!row) return;
+    var cell = row.querySelector('td.amount-cell');
+    if (!cell) return;
+    cell.classList.remove('amount-income', 'amount-expense', 'amount-balance');
+    cell.classList.add(val === '收入' ? 'amount-income' : (val === '结余' ? 'amount-balance' : 'amount-expense'));
+    var signEl = cell.querySelector('.amount-sign');
+    if (signEl) signEl.textContent = val === '收入' ? '+' : (val === '结余' ? '' : '-');
 }
 
 function deletePreviewRow(idx) {
@@ -5450,7 +5470,7 @@ function reRecognize() {
     updateOCREngineBadge();
 
     progressDiv.style.display = 'flex';
-    progressText.textContent = '正在用' + (engineLabels[engine] || '') + '重新识别...';
+    progressText.textContent = '解析识别中...';
 
     // 隐藏重新识别按钮
     var reBtn = document.getElementById('btnReRecognize');
@@ -5515,7 +5535,7 @@ function processImageOCR(file) {
     var progressText = document.getElementById('ocrProgressText');
     progressDiv.style.display = 'flex';
     var engineLabels = { tesseract: 'Tesseract', baidu: '百度AI', tencent: '腾讯云' };
-    progressText.textContent = '正在用' + (engineLabels[_ocrEngine] || '') + '识别...';
+    progressText.textContent = '解析识别中...';
 
     // 第一关：先用温和预处理判断图片模式
     // 温和预处理（preprocessImageForTransfer）不破坏任何图片结构，
@@ -6539,6 +6559,10 @@ function toggleOcrDebug() {
     if (body.style.display === 'none') {
         body.style.display = 'block';
         toggle.textContent = '收起 ▲';
+        // 展开后图片才真正可见，需要重新初始化画布尺寸
+        if (typeof initBoxCanvas === 'function') {
+            setTimeout(function() { initBoxCanvas(); }, 60);
+        }
     } else {
         body.style.display = 'none';
         toggle.textContent = '展开 ▼';
@@ -6709,8 +6733,9 @@ function parseOCRText(text, userId, preDetectedType) {
                 ? '⚠ 0条（' + (fallbackUsed ? '降级到通用解析器仍无结果' : '请尝试手动指定类型或检查截图质量') + '）'
                 : '✓ ' + bills.length + '条' + (fallbackUsed ? '（已降级到通用解析器）' : '');
             document.getElementById('debugRawText').value = text;
-            document.getElementById('ocrDebugBody').style.display = 'block';
-            document.getElementById('ocrDebugToggle').textContent = '收起 ▲';
+            // 调试信息默认折叠（很少用到），需要时手动展开
+            document.getElementById('ocrDebugBody').style.display = 'none';
+            document.getElementById('ocrDebugToggle').textContent = '展开 ▼';
         }
 
         // --- 控制台日志 ---
