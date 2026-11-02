@@ -3039,25 +3039,49 @@ function openImportModal() {
 function closeImportModal() {
     closeModal('importModal');
     window._previewBills = [];
+    _stopImportUserBlink();
 }
 
-// 未选择账单户时：高频闪烁下拉框 + 滚动定位 + 轻提示
+// 未选择账单户时：下拉框持续闪烁（一直闪到选好为止）+ 滚动定位 + 轻提示
 function _blinkImportUser() {
     var sel = document.getElementById('importUser');
     if (!sel) return;
-    sel.classList.remove('blink-warn');
-    void sel.offsetWidth; // 强制重排，让动画可以重复播放
-    sel.classList.add('blink-warn');
-    try { sel.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (e) { try { sel.scrollIntoView(); } catch (e2) {} }
-    try { sel.focus({ preventScroll: true }); } catch (e) {}
-    setTimeout(function() { sel.classList.remove('blink-warn'); }, 3000);
-    showToast('请先选择账单户，否则无法导入', 'error');
+    if (sel.value) { _stopImportUserBlink(); return; } // 已经选了，不再闪
+    if (!sel.classList.contains('blink-warn')) {
+        sel.classList.add('blink-warn');
+        try { sel.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (e) { try { sel.scrollIntoView(); } catch (e2) {} }
+        try { sel.focus({ preventScroll: true }); } catch (e) {}
+    }
+    // 提示只弹一次，避免反复解析时刷屏
+    if (!window._importUserBlinkToasted) {
+        window._importUserBlinkToasted = true;
+        showToast('请先选择账单户，否则无法导入', 'error');
+    }
+    // 兜底轮询：即使某些浏览器动画被中断，也保证状态跟随选择结果
+    if (window._importUserBlinkTimer) clearInterval(window._importUserBlinkTimer);
+    window._importUserBlinkTimer = setInterval(function() {
+        var s = document.getElementById('importUser');
+        if (!s || !s.classList.contains('blink-warn')) { clearInterval(window._importUserBlinkTimer); window._importUserBlinkTimer = null; return; }
+        if (s.value) _stopImportUserBlink();
+    }, 400);
+}
+
+// 停止闪烁（用户已选账单户 / 关闭弹窗）
+function _stopImportUserBlink() {
+    var sel = document.getElementById('importUser');
+    if (sel) sel.classList.remove('blink-warn');
+    if (window._importUserBlinkTimer) {
+        clearInterval(window._importUserBlinkTimer);
+        window._importUserBlinkTimer = null;
+    }
+    window._importUserBlinkToasted = false;
 }
 
 // 用户补选账单户后，同步预览数据并重新检测重复
 function onImportUserChange() {
     var v = document.getElementById('importUser').value;
     if (!v) return;
+    _stopImportUserBlink();
     window._previewUserId = v;
     if (window._previewBills && window._previewBills.length) {
         showPreview(window._previewBills, v);
@@ -3650,7 +3674,10 @@ function checkDuplicates(bills, userId) {
 function showPreview(bills, userId) {
     window._previewBills = bills;
     window._previewUserId = userId;
-    
+
+    // 未选账单户时：下拉框持续闪烁提醒，选好即停
+    if (!userId) { _blinkImportUser(); } else { _stopImportUserBlink(); }
+
     // 检测重复
     var dupResults = checkDuplicates(bills, userId);
     window._dupResults = dupResults;
@@ -3709,6 +3736,8 @@ function showPreview(bills, userId) {
         var amountClass = b.type === '收入' ? 'amount-income' : (b.type === '结余' ? 'amount-balance' : 'amount-expense');
         // 金额正负号：支出显示 "-"，收入显示 "+"，结余不带符号
         var amountSign = b.type === '收入' ? '+' : (b.type === '结余' ? '' : '-');
+        // 金额统一保留两位小数，并且与正负号拼成一个整体显示（符号与数字零间距）
+        var amountText = _formatAmount(b.amount);
         html += '<tr class="' + dupClass + '">' +
             (window._batchDateMode ? '<td style="text-align:center;"><input type="checkbox" class="batch-date-check" data-idx="' + idx + '"></td>' : '') +
             '<td><input type="date" class="preview-date-input" value="' + b.date + '" data-idx="' + idx + '" onchange="updatePreviewDate(' + idx + ', this.value);recheckDuplicates();" onkeydown="handlePreviewDateKeydown(event, this, ' + idx + ');">' + dateBadge + '</td>' +
@@ -3717,7 +3746,7 @@ function showPreview(bills, userId) {
             '<option value="收入"' + (b.type === '收入' ? ' selected' : '') + '>收入</option>' +
             '<option value="结余"' + (b.type === '结余' ? ' selected' : '') + '>结余</option>' +
             '</select></td>' +
-            '<td class="amount-cell ' + amountClass + '"><input type="text" inputmode="decimal" class="preview-amount-input" value="' + amountSign + b.amount + '" data-idx="' + idx + '" data-orig="' + b.amount + '" onchange="updatePreviewAmount(' + idx + ', this.value);recheckDuplicates();" onblur="handleAmountBlur(this, ' + idx + ');" onkeydown="handleAmountKeydown(event, this, ' + idx + ');">' + amountBadge + '</td>' +
+            '<td class="amount-cell ' + amountClass + '"><input type="text" inputmode="decimal" class="preview-amount-input" value="' + amountSign + amountText + '" data-idx="' + idx + '" data-orig="' + amountText + '" onchange="updatePreviewAmount(' + idx + ', this.value);recheckDuplicates();" onblur="handleAmountBlur(this, ' + idx + ');" onkeydown="handleAmountKeydown(event, this, ' + idx + ');">' + amountBadge + '</td>' +
             '<td><input type="text" class="preview-note-input" value="' + (b.note || '') + '" data-idx="' + idx + '" onchange="updatePreviewNote(' + idx + ', this.value);recheckDuplicates();" onkeydown="handlePreviewNoteKeydown(event, this, ' + idx + ');">' + noteBadge + dupIcon + '</td>' +
             '<td style="white-space:nowrap;">' +
             '<button class="btn-learn-save" onclick="saveAsLearningRule(' + idx + ', this)" title="记住此次修正，下次同款截屏自动识别">📘</button>' +
@@ -4104,6 +4133,14 @@ function updatePreviewNote(idx, val) {
     }
 }
 
+// 金额显示格式：统一保留两位小数（270 → 270.00，16.8 → 16.80）
+function _formatAmount(v) {
+    if (v === null || v === undefined || v === '') return '';
+    var n = parseFloat(String(v).replace(/[^0-9.]/g, ''));
+    if (!isFinite(n)) return String(v);
+    return n.toFixed(2);
+}
+
 // 金额正负号：支出 "-"，收入 "+"，结余不带符号
 function _amountSignOf(type) {
     return type === '收入' ? '+' : (type === '结余' ? '' : '-');
@@ -4124,6 +4161,8 @@ function _applyAmountSignToInput(input, idx) {
         raw = (bill && bill.amount !== undefined && bill.amount !== null) ? String(bill.amount) : '';
         if (raw === '') return;
     }
+    // 统一两位小数
+    raw = _formatAmount(raw) || raw;
     input.value = _amountSignOf(type) + raw;
     input.setAttribute('data-orig', raw);
 }
