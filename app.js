@@ -477,6 +477,24 @@ function syncPull() {
     console.log('[同步] 拉取中...');
     updateSyncStatus('同步中...');
     return _apiFetch('GET', _SYNC_PATH).then(function(fileInfo) {
+        if (!fileInfo) return null;
+        // GitHub Contents API 对 >1MB 的文件不内联返回内容（返回 content:'' / encoding:'none'），
+        // 此时必须按 sha 走 Git Blobs API（单文件上限 100MB）取回完整内容，
+        // 否则会被误判成"云端无数据"（数据其实还在）。
+        if ((!fileInfo.content || fileInfo.encoding === 'none') && fileInfo.sha) {
+            console.log('[同步] 文件大于1MB，改用 Blobs API 读取 sha=' + fileInfo.sha);
+            return _apiFetch('GET', '/repos/' + _SYNC_REPO + '/git/blobs/' + fileInfo.sha).then(function(blob) {
+                if (blob && blob.content) {
+                    return { content: blob.content, sha: fileInfo.sha, encoding: blob.encoding || 'base64' };
+                }
+                return fileInfo;
+            }).catch(function(e) {
+                console.error('[同步] Blobs API 读取失败:', e && e.message ? e.message : e);
+                return fileInfo;
+            });
+        }
+        return fileInfo;
+    }).then(function(fileInfo) {
         if (!fileInfo || !fileInfo.content) {
             console.log('[同步] 拉取: 云端无数据');
             updateSyncStatus('已连接');  // 连接正常但无数据
@@ -3865,20 +3883,23 @@ function showPreview(bills, userId) {
     updateOCREngineBadge();
     
     // 显示/隐藏重复警告
+    // 注意：写 dupWarnText.innerHTML 会销毁里面的 #dupCountBadge，
+    // 所以必须连同 id 一起重建，否则下一次调用 showPreview 时取到 null 而报错中断渲染。
     var dupBar = document.getElementById('dupWarningBar');
-    var dupBadge = document.getElementById('dupCountBadge');
     var dupWarnText = document.getElementById('dupWarningText');
     var removeDupBtn = document.getElementById('removeDupBtn');
     if (dupCount > 0) {
-        dupBar.style.display = 'flex';
-        dupBadge.textContent = dupCount;
-        removeDupBtn.style.display = '';
         var warnParts = [];
         if (exactDupCount > 0) warnParts.push('确认重复 <strong>' + exactDupCount + '</strong> 条');
         if (suspectDupCount > 0) warnParts.push('疑似重复 <strong>' + suspectDupCount + '</strong> 条');
-        dupWarnText.innerHTML = '⚠️ ' + warnParts.join('，');
+        if (dupWarnText) {
+            dupWarnText.innerHTML = '检测到 <strong id="dupCountBadge">' + dupCount + '</strong> 条与已有数据重复的记录'
+                + (warnParts.length ? '（' + warnParts.join('，') + '）' : '');
+        }
+        if (dupBar) dupBar.style.display = 'flex';
+        if (removeDupBtn) removeDupBtn.style.display = '';
     } else {
-        dupBar.style.display = 'none';
+        if (dupBar) dupBar.style.display = 'none';
     }
 
     var tbody = document.getElementById('previewTbody');
@@ -4107,19 +4128,20 @@ function recheckDuplicates() {
     });
     
     var dupBar = document.getElementById('dupWarningBar');
-    var dupBadge = document.getElementById('dupCountBadge');
     var dupWarnText = document.getElementById('dupWarningText');
     var removeDupBtn = document.getElementById('removeDupBtn');
     if (dupCount > 0) {
-        dupBar.style.display = 'flex';
-        dupBadge.textContent = dupCount;
-        removeDupBtn.style.display = '';
         var warnParts = [];
         if (exactDupCount > 0) warnParts.push('确认重复 <strong>' + exactDupCount + '</strong> 条');
         if (suspectDupCount > 0) warnParts.push('疑似重复 <strong>' + suspectDupCount + '</strong> 条');
-        dupWarnText.innerHTML = '⚠️ ' + warnParts.join('，');
+        if (dupWarnText) {
+            dupWarnText.innerHTML = '检测到 <strong id="dupCountBadge">' + dupCount + '</strong> 条与已有数据重复的记录'
+                + (warnParts.length ? '（' + warnParts.join('，') + '）' : '');
+        }
+        if (dupBar) dupBar.style.display = 'flex';
+        if (removeDupBtn) removeDupBtn.style.display = '';
     } else {
-        dupBar.style.display = 'none';
+        if (dupBar) dupBar.style.display = 'none';
     }
 }
 
@@ -4251,20 +4273,21 @@ function updateDupWarningBar() {
     var suspectDupCount = dupCount - exactDupCount;
     
     var dupBar = document.getElementById('dupWarningBar');
-    var dupBadge = document.getElementById('dupCountBadge');
     var dupWarnText = document.getElementById('dupWarningText');
     var removeDupBtn = document.getElementById('removeDupBtn');
     
     if (dupCount > 0) {
-        dupBar.style.display = 'flex';
-        dupBadge.textContent = dupCount;
-        removeDupBtn.style.display = '';
         var warnParts = [];
         if (exactDupCount > 0) warnParts.push('确认重复 <strong>' + exactDupCount + '</strong> 条');
         if (suspectDupCount > 0) warnParts.push('疑似重复 <strong>' + suspectDupCount + '</strong> 条');
-        dupWarnText.innerHTML = '⚠️ ' + warnParts.join('，');
+        if (dupWarnText) {
+            dupWarnText.innerHTML = '检测到 <strong id="dupCountBadge">' + dupCount + '</strong> 条与已有数据重复的记录'
+                + (warnParts.length ? '（' + warnParts.join('，') + '）' : '');
+        }
+        if (dupBar) dupBar.style.display = 'flex';
+        if (removeDupBtn) removeDupBtn.style.display = '';
     } else {
-        dupBar.style.display = 'none';
+        if (dupBar) dupBar.style.display = 'none';
     }
 }
 
