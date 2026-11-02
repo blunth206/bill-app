@@ -1,5 +1,5 @@
 // Service Worker - PWA 离线缓存（v20：CDN资源缓存，支持弱网/离线启动）
-const CACHE_NAME = 'jizhang-v45';
+const CACHE_NAME = 'jizhang-v46';
 const FILES_TO_CACHE = [
   '.',
   'index.html',
@@ -115,6 +115,17 @@ self.addEventListener('fetch', (event) => {
   if (isCore) {
     // 核心文件（app.js/index.html/style.css 等）：网络优先，失败/超时才回退缓存
     // 保证联网时用户刷新一次即可拿到最新代码（修复能立刻生效），断网弱网时仍可离线打开
+    // 回退时先按原 URL 找，再按去掉 ?v= 的同名文件找（避免升级版本号后断网白屏）
+    const fallbackCore = () => caches.match(event.request).then((r) => {
+      if (r) return r;
+      try {
+        const u = new URL(event.request.url);
+        u.search = '';
+        return caches.match(u.href);
+      } catch (e) {
+        return undefined;
+      }
+    });
     event.respondWith(
       fetchWithTimeout(event.request, 5000).then((response) => {
         if (response && response.ok) {
@@ -123,10 +134,10 @@ self.addEventListener('fetch', (event) => {
           return response;
         }
         // 网络返回异常状态，回退缓存
-        return caches.match(event.request);
+        return fallbackCore();
       }).catch(() => {
         // 网络不通/超时，回退缓存保证离线可用
-        return caches.match(event.request);
+        return fallbackCore();
       })
     );
   } else {
