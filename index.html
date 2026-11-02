@@ -57,7 +57,7 @@
     </script>
     <script>
         // 注册版本号需与 sw.js 的 CACHE_NAME 同步，升级时一并修改，确保浏览器拉取到最新 SW
-        if ('serviceWorker' in navigator) { navigator.serviceWorker.register('sw.js?v=43').catch(() => {}); }
+        if ('serviceWorker' in navigator) { navigator.serviceWorker.register('sw.js?v=44').catch(() => {}); }
         (function removeSafetyBanner() {
             const observer = new MutationObserver(function() {
                 const banners = document.querySelectorAll('div[style*="fixed"]');
@@ -487,7 +487,7 @@ async function handleRequest(request) {
             <div class="modal-body">
                 <div class="form-group">
                     <label>选择账单户：</label>
-                    <select id="importUser">
+                    <select id="importUser" onchange="onImportUserChange()">
                         <option value="">-- 请选择账单户 --</option>
                     </select>
                 </div>
@@ -522,101 +522,6 @@ async function handleRequest(request) {
                         <div class="ocr-spinner"></div>
                         <p id="ocrProgressText">解析识别中...</p>
                     </div>
-                    <!-- OCR调试面板（默认折叠，内含原图预览） -->
-                    <div class="ocr-debug-panel" id="ocrDebugPanel" style="display:none;">
-                        <div class="ocr-debug-header" onclick="toggleOcrDebug()">
-                            <span>🔧 OCR调试信息</span>
-                            <span id="ocrDebugToggle">展开 ▼</span>
-                        </div>
-                        <div class="ocr-debug-body" id="ocrDebugBody" style="display:none;">
-                            <div class="image-preview" id="imagePreview" style="display:none;">
-                        <div class="image-preview-toolbar" id="ocrToolbar">
-                            <span class="toolbar-label">引擎：</span>
-                            <button class="btn-ocr-engine active" data-engine="tesseract" onclick="setOCREngine('tesseract')" title="本地离线识别">💻</button>
-                            <button class="btn-ocr-engine" data-engine="baidu" onclick="setOCREngine('baidu')" title="百度AI云端识别">☁️B</button>
-                            <button class="btn-ocr-engine" data-engine="tencent" onclick="setOCREngine('tencent')" title="腾讯云云端识别">☁️T</button>
-                            <button class="btn-re-recognize" id="btnReRecognize" onclick="reRecognize()" title="用当前选择的引擎重新识别本图">🔄 重新识别</button>
-                            <span class="toolbar-separator"></span>
-                            <span class="toolbar-label">模式：</span>
-                            <button class="btn-ocr-mode active" data-mode="auto" onclick="setOCRMode('auto')">🤖 自动</button>
-                            <button class="btn-ocr-mode" data-mode="box" onclick="setOCRMode('box')">🎨 框选</button>
-                        </div>
-                        <div class="box-ocr-toolbar" id="boxOcrToolbar" style="display:none;">
-                            <span class="toolbar-label">画笔：</span>
-                            <button class="box-color-btn active" data-color="amount" onclick="setBoxColor('amount')">🔴 金额</button>
-                            <button class="box-color-btn" data-color="note" onclick="setBoxColor('note')">🔵 备注</button>
-                            <button class="box-color-btn" data-color="date" onclick="setBoxColor('date')">🟢 日期</button>
-                            <span class="toolbar-separator"></span>
-                            <span class="toolbar-label">缩放：</span>
-                            <button class="box-tool-btn" onclick="zoomOut()" title="缩小">−</button>
-                            <span id="zoomLevel" class="zoom-level-text">100%</span>
-                            <button class="box-tool-btn" onclick="zoomIn()" title="放大">+</button>
-                            <button class="box-tool-btn" onclick="resetZoom()" title="重置">⟲</button>
-                            <span class="toolbar-separator"></span>
-                            <button class="box-tool-btn" onclick="clearAllBoxes()">清空框</button>
-                            <button class="box-tool-btn primary" onclick="recognizeBoxes()">识别选中区域</button>
-                            <button class="box-tool-btn" onclick="saveBoxTemplate()" title="把当前框选位置保存为模板，下次同类型图自动框选">📘 保存模板</button>
-                        </div>
-                        <div id="boxTemplateBar" style="display:none;padding:6px 12px;background:#fef9e7;border:1px solid #f0e0a0;border-radius:8px;margin-top:8px;font-size:13px;color:#7a6500;">
-                            <span>框选模板：</span>
-                            <select id="boxTemplateSelect" style="flex:1;padding:4px 8px;border:1px solid #e0d080;border-radius:6px;"></select>
-                            <button class="box-tool-btn" onclick="applyBoxTemplate()">应用</button>
-                            <button class="box-tool-btn" onclick="deleteBoxTemplate()">删除</button>
-                        </div>
-                        <div class="image-preview-scroll" id="imagePreviewScroll">
-                            <div class="image-preview-wrapper" id="imagePreviewWrapper">
-                                <img id="previewImage" src="" alt="截图预览">
-                                <canvas id="boxCanvas" class="box-canvas"></canvas>
-                            </div>
-                        </div>
-                            </div><!-- /#imagePreview -->
-                                <div class="debug-row">
-                                    <span class="debug-label">检测类型：</span>
-                                    <span class="debug-value" id="debugDetectedType">-</span>
-                                </div>
-                                <div class="debug-row">
-                                    <span class="debug-label">使用解析器：</span>
-                                    <span class="debug-value" id="debugParser">-</span>
-                                </div>
-                                <div class="debug-row">
-                                    <span class="debug-label">识别结果：</span>
-                                    <span class="debug-value" id="debugResultCount">-</span>
-                                </div>
-                                <div class="debug-row">
-                                    <span class="debug-label">手动指定类型：</span>
-                                    <select id="debugManualType" onchange="setManualOCRType(this.value)" style="margin-left:8px;padding:4px 8px;border-radius:4px;border:1px solid #ddd;font-size:13px;">
-                                        <option value="">自动检测</option>
-                                        <option value="wechatBill">微信账单列表</option>
-                                        <option value="wechatTransfer">微信转账</option>
-                                        <option value="alipayBill">支付宝账单列表</option>
-                                        <option value="bankStatement">银行流水</option>
-                                        <option value="singlePayment">单笔支付/收款</option>
-                                        <option value="customerPayment">客户付款截图</option>
-                                        <option value="generic">通用格式</option>
-                                    </select>
-                                    <button class="btn btn-outline btn-sm" onclick="reparseWithManualType()" style="margin-left:8px;padding:2px 10px;font-size:12px;">重新解析</button>
-                                </div>
-                                <div class="debug-row" style="align-items:flex-start;">
-                                    <span class="debug-label">OCR原始文本：</span>
-                                    <button class="btn btn-outline btn-sm" onclick="copyOcrRawText()" style="margin-left:auto;padding:2px 10px;font-size:12px;">复制</button>
-                                </div>
-                                <textarea id="debugRawText" readonly style="width:100%;height:120px;font-size:11px;font-family:monospace;border:1px solid #ddd;border-radius:4px;padding:8px;resize:vertical;background:#fafafa;"></textarea>
-                                <p class="hint" style="margin-top:4px;font-size:11px;">如果识别不准，请复制上方原始文本反馈给我，我来优化解析规则</p>
-                            </div>
-                        </div>
-                        <!-- 学习规则管理面板 -->
-                        <div class="learn-panel" id="learnPanel">
-                            <div class="learn-panel-header" onclick="toggleLearnPanel()">
-                                <span>📚 学习记录（<span id="learnRuleCount">0</span>条规则）</span>
-                                <span id="learnPanelToggle" style="font-size:11px;">展开 ▼</span>
-                            </div>
-                            <div class="learn-panel-body" id="learnPanelBody" style="display:none;">
-                                <div class="learn-rules-container" id="learnRulesContainer">
-                                    <div style="color:#999;text-align:center;padding:20px 0;font-size:13px;">加载中...</div>
-                                </div>
-                            </div>
-                        </div>
-                        <p class="box-ocr-hint" id="boxOcrHint" style="display:none;">在图片上拖拽绘制方框：红色=金额、蓝色=备注、绿色=日期。同一行的框会自动组合成一条账单，其他数字会被忽略。</p>
                 </div>
                 <div class="form-group paste-area">
                     <label>或粘贴账单内容（Ctrl+V）：</label>
@@ -712,6 +617,101 @@ async function handleRequest(request) {
                     </div>
                 </div>
 
+                <!-- OCR调试面板（默认折叠，内含原图预览） -->
+                <div class="ocr-debug-panel" id="ocrDebugPanel" style="display:none;">
+                    <div class="ocr-debug-header" onclick="toggleOcrDebug()">
+                        <span>🔧 OCR调试信息</span>
+                        <span id="ocrDebugToggle">展开 ▼</span>
+                    </div>
+                    <div class="ocr-debug-body" id="ocrDebugBody" style="display:none;">
+                        <div class="image-preview" id="imagePreview" style="display:none;">
+                    <div class="image-preview-toolbar" id="ocrToolbar">
+                        <span class="toolbar-label">引擎：</span>
+                        <button class="btn-ocr-engine active" data-engine="tesseract" onclick="setOCREngine('tesseract')" title="本地离线识别">💻</button>
+                        <button class="btn-ocr-engine" data-engine="baidu" onclick="setOCREngine('baidu')" title="百度AI云端识别">☁️B</button>
+                        <button class="btn-ocr-engine" data-engine="tencent" onclick="setOCREngine('tencent')" title="腾讯云云端识别">☁️T</button>
+                        <button class="btn-re-recognize" id="btnReRecognize" onclick="reRecognize()" title="用当前选择的引擎重新识别本图">🔄 重新识别</button>
+                        <span class="toolbar-separator"></span>
+                        <span class="toolbar-label">模式：</span>
+                        <button class="btn-ocr-mode active" data-mode="auto" onclick="setOCRMode('auto')">🤖 自动</button>
+                        <button class="btn-ocr-mode" data-mode="box" onclick="setOCRMode('box')">🎨 框选</button>
+                    </div>
+                    <div class="box-ocr-toolbar" id="boxOcrToolbar" style="display:none;">
+                        <span class="toolbar-label">画笔：</span>
+                        <button class="box-color-btn active" data-color="amount" onclick="setBoxColor('amount')">🔴 金额</button>
+                        <button class="box-color-btn" data-color="note" onclick="setBoxColor('note')">🔵 备注</button>
+                        <button class="box-color-btn" data-color="date" onclick="setBoxColor('date')">🟢 日期</button>
+                        <span class="toolbar-separator"></span>
+                        <span class="toolbar-label">缩放：</span>
+                        <button class="box-tool-btn" onclick="zoomOut()" title="缩小">−</button>
+                        <span id="zoomLevel" class="zoom-level-text">100%</span>
+                        <button class="box-tool-btn" onclick="zoomIn()" title="放大">+</button>
+                        <button class="box-tool-btn" onclick="resetZoom()" title="重置">⟲</button>
+                        <span class="toolbar-separator"></span>
+                        <button class="box-tool-btn" onclick="clearAllBoxes()">清空框</button>
+                        <button class="box-tool-btn primary" onclick="recognizeBoxes()">识别选中区域</button>
+                        <button class="box-tool-btn" onclick="saveBoxTemplate()" title="把当前框选位置保存为模板，下次同类型图自动框选">📘 保存模板</button>
+                    </div>
+                    <div id="boxTemplateBar" style="display:none;padding:6px 12px;background:#fef9e7;border:1px solid #f0e0a0;border-radius:8px;margin-top:8px;font-size:13px;color:#7a6500;">
+                        <span>框选模板：</span>
+                        <select id="boxTemplateSelect" style="flex:1;padding:4px 8px;border:1px solid #e0d080;border-radius:6px;"></select>
+                        <button class="box-tool-btn" onclick="applyBoxTemplate()">应用</button>
+                        <button class="box-tool-btn" onclick="deleteBoxTemplate()">删除</button>
+                    </div>
+                    <div class="image-preview-scroll" id="imagePreviewScroll">
+                        <div class="image-preview-wrapper" id="imagePreviewWrapper">
+                            <img id="previewImage" src="" alt="截图预览">
+                            <canvas id="boxCanvas" class="box-canvas"></canvas>
+                        </div>
+                    </div>
+                        </div><!-- /#imagePreview -->
+                            <div class="debug-row">
+                                <span class="debug-label">检测类型：</span>
+                                <span class="debug-value" id="debugDetectedType">-</span>
+                            </div>
+                            <div class="debug-row">
+                                <span class="debug-label">使用解析器：</span>
+                                <span class="debug-value" id="debugParser">-</span>
+                            </div>
+                            <div class="debug-row">
+                                <span class="debug-label">识别结果：</span>
+                                <span class="debug-value" id="debugResultCount">-</span>
+                            </div>
+                            <div class="debug-row">
+                                <span class="debug-label">手动指定类型：</span>
+                                <select id="debugManualType" onchange="setManualOCRType(this.value)" style="margin-left:8px;padding:4px 8px;border-radius:4px;border:1px solid #ddd;font-size:13px;">
+                                    <option value="">自动检测</option>
+                                    <option value="wechatBill">微信账单列表</option>
+                                    <option value="wechatTransfer">微信转账</option>
+                                    <option value="alipayBill">支付宝账单列表</option>
+                                    <option value="bankStatement">银行流水</option>
+                                    <option value="singlePayment">单笔支付/收款</option>
+                                    <option value="customerPayment">客户付款截图</option>
+                                    <option value="generic">通用格式</option>
+                                </select>
+                                <button class="btn btn-outline btn-sm" onclick="reparseWithManualType()" style="margin-left:8px;padding:2px 10px;font-size:12px;">重新解析</button>
+                            </div>
+                            <div class="debug-row" style="align-items:flex-start;">
+                                <span class="debug-label">OCR原始文本：</span>
+                                <button class="btn btn-outline btn-sm" onclick="copyOcrRawText()" style="margin-left:auto;padding:2px 10px;font-size:12px;">复制</button>
+                            </div>
+                            <textarea id="debugRawText" readonly style="width:100%;height:120px;font-size:11px;font-family:monospace;border:1px solid #ddd;border-radius:4px;padding:8px;resize:vertical;background:#fafafa;"></textarea>
+                            <p class="hint" style="margin-top:4px;font-size:11px;">如果识别不准，请复制上方原始文本反馈给我，我来优化解析规则</p>
+                        </div>
+                    </div>
+                    <!-- 学习规则管理面板 -->
+                    <div class="learn-panel" id="learnPanel">
+                        <div class="learn-panel-header" onclick="toggleLearnPanel()">
+                            <span>📚 学习记录（<span id="learnRuleCount">0</span>条规则）</span>
+                            <span id="learnPanelToggle" style="font-size:11px;">展开 ▼</span>
+                        </div>
+                        <div class="learn-panel-body" id="learnPanelBody" style="display:none;">
+                            <div class="learn-rules-container" id="learnRulesContainer">
+                                <div style="color:#999;text-align:center;padding:20px 0;font-size:13px;">加载中...</div>
+                            </div>
+                        </div>
+                    </div>
+                    <p class="box-ocr-hint" id="boxOcrHint" style="display:none;">在图片上拖拽绘制方框：红色=金额、蓝色=备注、绿色=日期。同一行的框会自动组合成一条账单，其他数字会被忽略。</p>
             </div>
             <div class="modal-footer">
                 <button class="btn btn-outline" onclick="closeImportModal()">取消</button>
