@@ -5290,8 +5290,10 @@ var _OCR_LEARN = (function() {
 })();
 
 // ==================== 多引擎OCR识别 ====================
-// OCR引擎配置：tesseract(本地) / baidu(百度AI) / tencent(腾讯云)
+// OCR引擎配置：tesseract(本地) / baidu(百度AI) / tencent(腾讯云) / local(本地模型服务)
 var _ocrEngine = 'tesseract';      // 当前选择的OCR引擎（默认Tesseract，用户可在设置页改）
+var _defaultOcrEngine = 'tesseract'; // 设置页保存的默认引擎（识别完自动恢复至此）
+var _localOcrUrl = 'http://localhost:9001/ocr'; // 本地模型服务端点（RapidOCR 等）
 var _baiduAccessToken = null;        // 百度API access_token缓存
 var _baiduTokenExpire = 0;           // 百度token过期时间戳
 
@@ -5301,6 +5303,7 @@ function loadOCRConfig() {
     var DEFAULTS = {
         engine: 'tesseract',
         corsProxy: 'http://localhost:9000',
+        localOcrUrl: 'http://localhost:9001/ocr',
         baiduApiKey: 'WR0LleTEML63Cip7xlYijarq',
         baiduSecretKey: 'QAp4oABsIQ8w20h1p8KowxQleCTlHgbD',
         tencentSecretId: 'AKIDTH0d8d4Vo02sBKJ6h7OVQGwQhnhQwlPv',
@@ -5330,7 +5333,8 @@ function loadOCRConfig() {
         }
 
         // 应用到全局
-        if (cfg.engine) _ocrEngine = cfg.engine;
+        if (cfg.engine) { _ocrEngine = cfg.engine; _defaultOcrEngine = cfg.engine; }
+        if (cfg.localOcrUrl) _localOcrUrl = cfg.localOcrUrl;
         if (cfg.baiduApiKey && cfg.baiduSecretKey) {
             window._baiduApiKey = cfg.baiduApiKey;
             window._baiduSecretKey = cfg.baiduSecretKey;
@@ -5360,7 +5364,7 @@ function setOCREngine(engine) {
     _ocrEngine = engine;
     updateOCREngineUI();
     console.log('[OCR引擎] 临时切换至:', engine);
-    var names = { tesseract: 'Tesseract(本地)', baidu: '百度AI', tencent: '腾讯云' };
+    var names = { tesseract: 'Tesseract(本地)', baidu: '百度AI', tencent: '腾讯云', local: '本地模型', browser: '本地强模型' };
     if (engine !== 'tesseract') {
         showToast('⚡ 临时使用 ' + (names[engine] || engine) + '（识别完成后自动回到Tesseract）', 'info', 3000);
     }
@@ -5374,10 +5378,10 @@ function setOCREngine(engine) {
     }
 }
 
-// 恢复引擎为Tesseract默认
+// 恢复引擎为设置页保存的默认引擎
 function resetOCREngineToDefault() {
-    // 默认引擎回退为 Tesseract（用户可在设置页改成百度或腾讯）
-    var defaultEngine = 'tesseract';
+    // 默认引擎回退为设置页保存的引擎（用户可在设置页改成本地模型/百度/腾讯等）
+    var defaultEngine = (typeof _defaultOcrEngine !== 'undefined' && _defaultOcrEngine) ? _defaultOcrEngine : 'tesseract';
     if (_ocrEngine !== defaultEngine) {
         _ocrEngine = defaultEngine;
         updateOCREngineUI();
@@ -5407,6 +5411,12 @@ function updateOCREngineBadge() {
     if (engine === 'baidu' || engine === 'tencent') {
         badge.textContent = (engine === 'baidu' ? '☁️ 百度AI' : '☁️ 腾讯云');
         badge.className = 'ocr-engine-badge cloud';
+    } else if (engine === 'local') {
+        badge.textContent = '💻 本地模型';
+        badge.className = 'ocr-engine-badge local';
+    } else if (engine === 'browser') {
+        badge.textContent = '🧠 本地强模型';
+        badge.className = 'ocr-engine-badge local';
     } else if (isFallback) {
         badge.textContent = (engine.indexOf('baidu') >= 0 ? '⚠️ 百度失败→本地' : '⚠️ 腾讯失败→本地');
         badge.className = 'ocr-engine-badge fallback';
@@ -5483,6 +5493,28 @@ function saveTencentOcrConfig() {
     });
 }
 
+// 保存本地模型服务端点
+function saveLocalOcrConfig() {
+    var input = document.getElementById('localOcrUrl');
+    if (!input) return;
+    var url = (input.value || '').trim();
+    if (!url) {
+        showToast('本地模型端点不能为空', 'error');
+        return;
+    }
+    _localOcrUrl = url;
+    loadOCRConfigFull().then(function(cfg) {
+        cfg.localOcrUrl = url;
+        return _IDB.setItem('billApp_ocrConfig', JSON.stringify(cfg));
+    }).then(function() {
+        var st = document.getElementById('localOcrStatus');
+        if (st) { st.textContent = '✓ 已保存'; st.style.color = '#22c55e'; setTimeout(function(){st.textContent='';},3000); }
+        showToast('本地模型端点已保存', 'success');
+    }).catch(function(err) {
+        showToast('保存失败: ' + (err.message || err), 'error');
+    });
+}
+
 // 更新设置页面OCR配置UI
 function updateOCRConfigUI() {
     var bKey = document.getElementById('baiduApiKey');
@@ -5490,11 +5522,13 @@ function updateOCRConfigUI() {
     var tId = document.getElementById('tencentSecretId');
     var tKey = document.getElementById('tencentSecretKey');
     var pUrl = document.getElementById('corsProxyUrl');
+    var lUrl = document.getElementById('localOcrUrl');
     if (bKey && window._baiduApiKey) bKey.value = window._baiduApiKey;
     if (bSec && window._baiduSecretKey) bSec.value = window._baiduSecretKey;
     if (tId && window._tencentSecretId) tId.value = window._tencentSecretId;
     if (tKey && window._tencentSecretKey) tKey.value = window._tencentSecretKey;
     if (pUrl && _ocrProxy) pUrl.value = _ocrProxy;
+    if (lUrl && _localOcrUrl) lUrl.value = _localOcrUrl;
     // 显示/隐藏对应配置区域
     onOCRenginchanged();
 }
@@ -5504,6 +5538,7 @@ function onOCRenginchanged() {
     var sel = document.getElementById('ocrEngineSelect');
     var bCfg = document.getElementById('baiduOcrConfig');
     var tCfg = document.getElementById('tencentOcrConfig');
+    var lCfg = document.getElementById('localOcrConfig');
     if (!sel) return;
     var v = sel.value;
     // 切换引擎时立即更新全局变量并保存到 IndexedDB
@@ -5515,6 +5550,7 @@ function onOCRenginchanged() {
     }
     if (bCfg) bCfg.style.display = (v === 'baidu') ? 'block' : 'none';
     if (tCfg) tCfg.style.display = (v === 'tencent') ? 'block' : 'none';
+    if (lCfg) lCfg.style.display = (v === 'local') ? 'block' : 'none';
 }
 
 // CORS代理管理
@@ -5748,6 +5784,30 @@ function ocrRecognize(imageDataUrl, options) {
             return ocrTesseract(imageDataUrl, options);
         });
     }
+    if (engine === 'local') {
+        return ocrLocal(imageDataUrl).then(function(result) {
+            result.engine = 'local';
+            window._ocrActualEngine = 'local';
+            return result;
+        }).catch(function(err) {
+            console.warn('[OCR引擎] 本地模型识别失败，回退到Tesseract:', err.message);
+            showToast('⚠️ 本地模型连接失败(' + err.message.substr(0, 40) + ')，请确认本地服务已启动', 'warn', 4000);
+            window._ocrActualEngine = 'tesseract(fallback)';
+            return ocrTesseract(imageDataUrl, options);
+        });
+    }
+    if (engine === 'browser') {
+        return ocrBrowser(imageDataUrl).then(function(result) {
+            result.engine = 'browser';
+            window._ocrActualEngine = 'browser';
+            return result;
+        }).catch(function(err) {
+            console.warn('[OCR引擎] 本地强模型(浏览器)识别失败，回退到Tesseract:', err.message);
+            showToast('⚠️ 本地强模型加载失败(' + err.message.substr(0, 60) + ')，已回退到本地识别', 'warn', 5000);
+            window._ocrActualEngine = 'tesseract(fallback)';
+            return ocrTesseract(imageDataUrl, options);
+        });
+    }
     // tesseract
     window._ocrActualEngine = 'tesseract';
     return ocrTesseract(imageDataUrl, options).then(function(result) {
@@ -5778,6 +5838,98 @@ function ocrTesseract(imageDataUrl, options) {
     });
 }
 
+// ============================================================
+// 本地模型服务 OCR（RapidOCR 等本地服务，POST 图片到本地端点）
+//   端点：window._localOcrUrl（默认 http://localhost:9001/ocr）
+//   请求：multipart/form-data，字段 image = 图片文件
+//   响应：{ success, text, records, engine }
+//     - text：纯文本（走现有 doParse 文本解析）
+//     - records：结构化账单数组（若有则直接进预览，跳过正则解析）
+// ============================================================
+function ocrLocal(imageDataUrl) {
+    var url = (typeof _localOcrUrl !== 'undefined' && _localOcrUrl) ? _localOcrUrl : 'http://localhost:9001/ocr';
+    // dataURL -> Blob，再以 multipart/form-data 上传
+    return fetch(imageDataUrl).then(function(r) { return r.blob(); }).then(function(blob) {
+        var fd = new FormData();
+        fd.append('image', blob, 'bill.png');
+        return fetch(url, { method: 'POST', body: fd });
+    }).then(function(r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+    }).then(function(data) {
+        if (data && data.success === false) throw new Error(data.error || '本地服务返回失败');
+        var text = (data && data.text) ? data.text : '';
+        var records = (data && Array.isArray(data.records)) ? data.records : [];
+        return { text: text, records: records, raw: data, engine: 'local' };
+    });
+}
+
+// 本地强模型（浏览器端 RapidOCR，无需服务器）：
+//   首次使用动态加载 onnxruntime-web + 三个 ONNX 模型 + 字库（约 30MB，之后浏览器缓存），
+//   在浏览器内完成检测/识别/账单解析，返回结构化 records，与本地模型服务(本地:9001)同款效果。
+var _browserOcrEngine = null;
+var _browserOcrInit = null;
+function ocrBrowser(imageDataUrl) {
+    if (!_browserOcrInit) {
+        _browserOcrInit = (async function() {
+            showToast('🧠 正在加载本地强模型（首次需下载约30MB模型，请稍候）…', 'info', 6000);
+            var engMod = await import('./ocr-web/rapidocr-engine.js');
+            var parMod = await import('./ocr-web/bill-parser.js');
+            var eng = new engMod.RapidOCREngine();
+            await eng.init({
+                detUrl: 'ocr-web/models/PP-OCRv6_det_small.onnx',
+                recUrl: 'ocr-web/models/PP-OCRv6_rec_small.onnx',
+                clsUrl: 'ocr-web/models/ch_ppocr_mobile_v2.0_cls_mobile.onnx',
+                vocabUrl: 'ocr-web/models/ppocrv6_vocab.txt',
+                ortUrl: 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.wasm.min.mjs',
+                wasmPaths: 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/'
+            });
+            return { eng: eng, parseBills: parMod.parseBills };
+        })();
+    }
+    return _browserOcrInit.then(function(mod) {
+        var img = new Image();
+        img.src = imageDataUrl;
+        return img.decode().then(function() {
+            return mod.eng.recognize(img);
+        }).then(function(res) {
+            var records = mod.parseBills(res.text || '');
+            return { text: res.text || '', records: records, raw: res, engine: 'browser' };
+        });
+    });
+}
+
+// 读取原图为 canvas（本地强模型用原图，跳过 Tesseract 二值化预处理）
+function readOriginalCanvas(file) {
+    return new Promise(function(resolve, reject) {
+        var fr = new FileReader();
+        fr.onload = function() {
+            var img = new Image();
+            img.onload = function() {
+                var canvas = document.createElement('canvas');
+                canvas.width = img.width;
+                canvas.height = img.height;
+                canvas.getContext('2d').drawImage(img, 0, 0);
+                resolve(canvas);
+            };
+            img.onerror = function() { reject(new Error('图片解码失败')); };
+            img.src = fr.result;
+        };
+        fr.onerror = function() { reject(new Error('文件读取失败')); };
+        fr.readAsDataURL(file);
+    });
+}
+
+// 根据当前引擎选择待识别图片：
+// 本地模型(local) 用原图 canvas；云端百度/腾讯 走接口时自带原图；Tesseract 走对应预处理
+function prepareOCRImage(file, mode) {
+    if (_ocrEngine === 'local' || _ocrEngine === 'browser') {
+        return readOriginalCanvas(file);
+    }
+    if (mode === 'transfer') return preprocessImageForTransfer(file);
+    return preprocessImage(file);
+}
+
 // ==================== 重新识别（切换引擎后对当前图片重新OCR） ====================
 function reRecognize() {
     var userId = document.getElementById('importUser').value;
@@ -5793,7 +5945,7 @@ function reRecognize() {
 
     var progressDiv = document.getElementById('ocrProgress');
     var progressText = document.getElementById('ocrProgressText');
-    var engineLabels = { tesseract: 'Tesseract', baidu: '百度AI', tencent: '腾讯云' };
+    var engineLabels = { tesseract: 'Tesseract', baidu: '百度AI', tencent: '腾讯云', local: '本地模型', browser: '本地强模型' };
     var engine = _ocrEngine;
 
     // 重置实际引擎徽章，避免显示旧的失败状态
@@ -5807,10 +5959,10 @@ function reRecognize() {
     var reBtn = document.getElementById('btnReRecognize');
     if (reBtn) reBtn.classList.remove('visible');
 
-    // 选择预处理函数：微信转账/详情页模式用专用预处理（不激进处理大字号标题/金额）
+    // 选择预处理函数：本地模型用原图；微信转账/详情页模式用专用预处理；其余用 Tesseract 预处理
     var activeBtn = document.querySelector('.btn-ocr-engine.active');
     var useTransferPre = activeBtn && activeBtn.dataset.engine === 'wechatTransfer';
-    var prepPromise = useTransferPre ? preprocessImageForTransfer(file) : preprocessImage(file);
+    var prepPromise = prepareOCRImage(file, useTransferPre ? 'transfer' : 'aggressive');
     prepPromise.then(function(processedCanvas) {
         var dataUrl = processedCanvas.toDataURL('image/png');
 
@@ -5865,13 +6017,13 @@ function processImageOCR(file) {
     var progressDiv = document.getElementById('ocrProgress');
     var progressText = document.getElementById('ocrProgressText');
     progressDiv.style.display = 'flex';
-    var engineLabels = { tesseract: 'Tesseract', baidu: '百度AI', tencent: '腾讯云' };
+    var engineLabels = { tesseract: 'Tesseract', baidu: '百度AI', tencent: '腾讯云', local: '本地模型', browser: '本地强模型' };
     progressText.textContent = '解析识别中...';
 
     // 第一关：先用温和预处理判断图片模式
     // 温和预处理（preprocessImageForTransfer）不破坏任何图片结构，
     // 既能识别微信转账详情页的大字号标题/金额，也能识别账单列表
-    preprocessImageForTransfer(file).then(function(processedCanvas) {
+    prepareOCRImage(file, 'transfer').then(function(processedCanvas) {
         var dataUrl = processedCanvas.toDataURL('image/png');
 
         // 统一OCR接口（自动根据引擎选择）
@@ -5893,9 +6045,19 @@ function processImageOCR(file) {
             window._detectedImageMode = mode;
             console.log('[模式预判] 检测到图片模式:', mode);
 
+            // 若有结构化账单（本地模型直接返回 records），直接进预览
+            if (result.records && result.records.length) {
+                window._ocrLastText = text;
+                return applyLocalRecords(result.records, userId, mode);
+            }
+
             // 第二关：根据模式选择解析
             if (mode === 'wechatBill') {
-                // 微信账单列表：用激进预处理重新识别，提升精度
+                // 微信账单列表：Tesseract 用激进预处理重新识别，提升精度；本地模型一次识别即可
+                if (_ocrEngine === 'local') {
+                    parseOCRText(text, userId, mode);
+                    return;
+                }
                 return preprocessImage(file).then(function(processed2) {
                     var dataUrl2 = processed2.toDataURL('image/png');
                     progressDiv.style.display = 'flex';
@@ -7169,7 +7331,35 @@ function parseOCRText(text, userId, preDetectedType) {
     });
 }
 
-// ==================== 初始化 ====================
+// 本地模型返回结构化账单(records)时，直接映射进预览，跳过文本正则解析
+//   每条记录: { date, type(收入/支出 或 in/out), amount(数字), note }
+function applyLocalRecords(records, userId, mode) {
+    var bills = [];
+    (records || []).forEach(function(r) {
+        if (!r) return;
+        var amount = parseFloat(String(r.amount == null ? '' : r.amount).replace(/[^\d.\-]/g, ''));
+        if (!isFinite(amount) || amount === 0) return;
+        var type = '支出';
+        var t = String(r.type == null ? '' : r.type).toLowerCase();
+        if (t.indexOf('收') >= 0 || t === 'in' || t === 'income' || t === '+' || t.indexOf('支出') >= 0) {
+            type = (t.indexOf('收') >= 0 || t === 'in' || t === 'income' || t === '+') ? '收入' : '支出';
+        }
+        var rawDate = String(r.date == null ? '' : r.date).trim();
+        var date = (typeof parseDateStr === 'function' && parseDateStr(rawDate)) ? parseDateStr(rawDate) : rawDate;
+        bills.push({
+            date: date,
+            type: type,
+            amount: Math.abs(amount),
+            note: String(r.note == null ? '' : r.note).trim()
+        });
+    });
+    if (bills.length === 0) {
+        showToast('本地模型未返回有效账单，已退回文本解析', 'info');
+        return;
+    }
+    console.log('[OCR本地模型] 结构化账单直接进预览:', bills.length, '条');
+    showPreview(bills, userId);
+}
 function init() {
     // 初始化云同步，再迁移旧数据，再加载
     initCloudSync().then(function() {
@@ -7439,7 +7629,7 @@ function recognizeBoxes() {
     var progressDiv = document.getElementById('ocrProgress');
     var progressText = document.getElementById('ocrProgressText');
     progressDiv.style.display = 'flex';
-    var engineLabels = { tesseract: 'Tesseract', baidu: '百度AI', tencent: '腾讯云' };
+    var engineLabels = { tesseract: 'Tesseract', baidu: '百度AI', tencent: '腾讯云', local: '本地模型', browser: '本地强模型' };
     progressText.textContent = '正在用' + (engineLabels[_ocrEngine] || '') + '识别选中区域...';
 
     var img = new Image();

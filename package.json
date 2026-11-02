@@ -1,6 +1,30 @@
 {
   "dependencies": {
+    "@capacitor/android": "^8.5.0",
+    "@capacitor/cli": "^8.5.0",
+    "@capacitor/core": "^8.5.0",
+    "onnxruntime-web": "^1.20.1",
     "playwright": "^1.61.1",
     "sharp": "^0.35.3"
-  }
+  },
+  "name": "bookkeeping-tool",
+  "version": "1.0.0",
+  "description": "",
+  "main": "app.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node server.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/blunth206/bill-app.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/blunth206/bill-app/issues"
+  },
+  "homepage": "https://github.com/blunth206/bill-app#readme"
 }

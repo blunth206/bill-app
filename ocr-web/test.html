@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>本地强模型（浏览器端 RapidOCR）测试页</title>
+<style>
+  body { font-family: system-ui, "Microsoft YaHei", sans-serif; margin: 0; padding: 16px; background: #f7f8fa; color: #1e293b; }
+  h1 { font-size: 18px; } .tip { color: #64748b; font-size: 13px; line-height: 1.7; }
+  #drop { border: 2px dashed #cbd5e1; border-radius: 12px; padding: 28px; text-align: center; background: #fff; cursor: pointer; }
+  #drop.over { border-color: #4f46e5; background: #eef2ff; }
+  img#preview { max-width: 320px; display: block; margin: 12px 0; border: 1px solid #e2e8f0; }
+  pre { background: #0f172a; color: #e2e8f0; padding: 12px; border-radius: 8px; overflow: auto; max-height: 360px; font-size: 12px; }
+  .rec { background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px 12px; margin: 8px 0; }
+  .rec b { color: #16a34a; } .rec i { color: #dc2626; } .rec span { color: #2563eb; }
+  #status { font-size: 13px; color: #4f46e5; min-height: 18px; }
+</style>
+</head>
+<body>
+  <h1>🧠 本地强模型 · 浏览器端 RapidOCR</h1>
+  <p class="tip">
+    浏览器内完成文字识别 + 账单解析，无需服务器（首次会下载约 30MB 模型并缓存）。<br>
+    引擎与本地 Python 服务（local:9001）同款 PP-OCRv6 small，解析器逐字对齐。
+  </p>
+  <div id="drop">点击选择 / 拖入账单截图（手机截图、微信/支付宝账单均可）</div>
+  <input type="file" id="file" accept="image/*" hidden />
+  <div id="status"></div>
+  <img id="preview" />
+  <h3>识别文本</h3><pre id="text">（尚无）</pre>
+  <h3>解析结果</h3><div id="recs"></div>
+
+<script type="module">
+  const drop = document.getElementById('drop');
+  const fileInput = document.getElementById('file');
+  const statusEl = document.getElementById('status');
+  const preview = document.getElementById('preview');
+  const textEl = document.getElementById('text');
+  const recsEl = document.getElementById('recs');
+
+  let engine = null, parseBills = null;
+  async function ensureEngine() {
+    if (engine) return;
+    statusEl.textContent = '加载 onnxruntime-web + 模型（首次约30MB）…';
+    const engMod = await import('./rapidocr-engine.js');
+    const parMod = await import('./bill-parser.js');
+    engine = new engMod.RapidOCREngine();
+    await engine.init({
+      detUrl: 'models/PP-OCRv6_det_small.onnx',
+      recUrl: 'models/PP-OCRv6_rec_small.onnx',
+      clsUrl: 'models/ch_ppocr_mobile_v2.0_cls_mobile.onnx',
+      vocabUrl: 'models/ppocrv6_vocab.txt',
+      ortUrl: 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.wasm.min.mjs',
+      wasmPaths: 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/'
+    });
+    parseBills = parMod.parseBills;
+    statusEl.textContent = '引擎就绪';
+  }
+
+  async function run(file) {
+    await ensureEngine();
+    const url = URL.createObjectURL(file);
+    preview.src = url;
+    const img = new Image();
+    img.src = url;
+    await img.decode();
+    statusEl.textContent = '识别中…';
+    const t0 = performance.now();
+    const res = await engine.recognize(img);
+    const dt = ((performance.now() - t0) / 1000).toFixed(1);
+    textEl.textContent = res.text || '（空）';
+    const records = parseBills(res.text || '');
+    recsEl.innerHTML = records.length
+      ? records.map(r => `<div class="rec">📅 <b>${r.date}</b> ${r.type === '收入' ? '↓收入' : '↑支出'} <i>¥${r.amount}</i> · <span>${r.note || '—'}</span></div>`).join('')
+      : '<div class="rec">未解析出账单记录</div>';
+    statusEl.textContent = `完成：${res.lines.length} 行文本 / ${records.length} 条账单 / ${dt}s`;
+  }
+
+  drop.addEventListener('click', () => fileInput.click());
+  fileInput.addEventListener('change', e => { if (e.target.files[0]) run(e.target.files[0]); });
+  ['dragover','dragenter'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('over'); }));
+  ['dragleave','drop'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('over'); }));
+  drop.addEventListener('drop', e => { if (e.dataTransfer.files[0]) run(e.dataTransfer.files[0]); });
+</script>
+</body>
+</html>

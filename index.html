@@ -68,7 +68,7 @@
                     location.reload();
                 });
             }
-            navigator.serviceWorker.register('sw.js?v=48').catch(function() {});
+            navigator.serviceWorker.register('sw.js?v=49').catch(function() {});
         })();
         (function removeSafetyBanner() {
             const observer = new MutationObserver(function() {
@@ -351,6 +351,8 @@
                         <label style="font-weight:600;">默认识别引擎：</label>
                         <select id="ocrEngineSelect" onchange="onOCRenginchanged()" style="width:100%;padding:10px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;background:var(--card-bg);margin-top:6px;">
                             <option value="tesseract">💻 Tesseract（本地离线，免费）</option>
+                            <option value="browser">🧠 本地强模型（浏览器端离线，精度高）</option>
+                            <option value="local">💻 本地模型（本地服务，免费，精度高）</option>
                             <option value="baidu">☁️ 百度AI（云端，免费500次/天）</option>
                             <option value="tencent">☁️ 腾讯云（云端，免费1000次/月）</option>
                         </select>
@@ -472,6 +474,26 @@ async function handleRequest(request) {
                         </div>
                         <button class="btn btn-primary" onclick="saveTencentOcrConfig()" style="margin-top:10px;font-size:13px;">💾 保存配置</button>
                         <span id="tencentConfigStatus" style="margin-left:10px;font-size:12px;color:var(--text-secondary);"></span>
+                    </div>
+
+                    <!-- 本地模型服务配置（RapidOCR 等，运行在你自己电脑上） -->
+                    <div class="ocr-api-config" id="localOcrConfig" style="display:none;margin-top:16px;padding:16px;background:var(--card-bg);border-radius:10px;border:1px solid var(--border);">
+                        <h4 style="margin:0 0 8px 0;font-size:14px;">🖥️ 本地模型服务（RapidOCR）</h4>
+                        <div style="margin-bottom:12px;padding:12px;background:#E8F5E9;border-radius:8px;border-left:3px solid #2E7D32;">
+                            <div style="font-size:12px;color:#1B5E20;line-height:1.8;">
+                                <b>💡 说明：</b>在你的电脑上运行一个本地 Python 服务（见 <code>local_ocr/rapidocr_server.py</code>），
+                                账单截图只在你本机识别，<b>不经过网络、不经过 GitHub</b>，中文精度远超 Tesseract。<br>
+                                ① 安装依赖：<code>pip install -r local_ocr/requirements.txt</code><br>
+                                ② 启动服务：<code>python local_ocr/rapidocr_server.py</code><br>
+                                ③ 下方端点默认 <code>http://localhost:9001/ocr</code>（若未运行云端代理可改成 9000）
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label>服务端点：</label>
+                            <input type="text" id="localOcrUrl" placeholder="http://localhost:9001/ocr" style="width:100%;padding:8px 12px;border:1px solid var(--border);border-radius:6px;font-size:13px;font-family:monospace;">
+                        </div>
+                        <button class="btn btn-primary" onclick="saveLocalOcrConfig()" style="margin-top:10px;font-size:13px;">💾 保存配置</button>
+                        <span id="localOcrStatus" style="margin-left:10px;font-size:12px;color:var(--text-secondary);"></span>
                     </div>
                 </div>
             </section>
@@ -652,6 +674,7 @@ async function handleRequest(request) {
                         <button class="btn-ocr-engine active" data-engine="tesseract" onclick="setOCREngine('tesseract')" title="本地离线识别">💻</button>
                         <button class="btn-ocr-engine" data-engine="baidu" onclick="setOCREngine('baidu')" title="百度AI云端识别">☁️B</button>
                         <button class="btn-ocr-engine" data-engine="tencent" onclick="setOCREngine('tencent')" title="腾讯云云端识别">☁️T</button>
+                        <button class="btn-ocr-engine" data-engine="browser" onclick="setOCREngine('browser')" title="本地强模型（浏览器端离线识别，精度最高）">🧠</button>
                         <button class="btn-re-recognize" id="btnReRecognize" onclick="reRecognize()" title="用当前选择的引擎重新识别本图">🔄 重新识别</button>
                         <span class="toolbar-separator"></span>
                         <span class="toolbar-label">模式：</span>
@@ -1033,7 +1056,7 @@ async function handleRequest(request) {
     <!-- Toast 提示 -->
     <div class="toast" id="toast"></div>
 
-    <script src="app.js?v=52"></script>
+    <script src="app.js?v=53"></script>
     <script>
     (function(){
         function showForgot(){

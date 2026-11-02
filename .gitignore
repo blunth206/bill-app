@@ -8,3 +8,5 @@ package-lock.json
 .playwright-cli/
 .DS_Store
 Thumbs.db
+ocr-web/_test/
+ocr-web/node_modules/
