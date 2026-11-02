@@ -57,7 +57,7 @@
     </script>
     <script>
         // 注册版本号需与 sw.js 的 CACHE_NAME 同步，升级时一并修改，确保浏览器拉取到最新 SW
-        if ('serviceWorker' in navigator) { navigator.serviceWorker.register('sw.js?v=42').catch(() => {}); }
+        if ('serviceWorker' in navigator) { navigator.serviceWorker.register('sw.js?v=43').catch(() => {}); }
         (function removeSafetyBanner() {
             const observer = new MutationObserver(function() {
                 const banners = document.querySelectorAll('div[style*="fixed"]');
@@ -517,7 +517,19 @@ async function handleRequest(request) {
                         </div>
                         <canvas id="cameraCanvas" style="display:none;"></canvas>
                     </div>
-                    <div class="image-preview" id="imagePreview" style="display:none;">
+                    <!-- 解析进度（识别过程中显示，完成后自动隐藏） -->
+                    <div class="ocr-progress" id="ocrProgress" style="display:none;">
+                        <div class="ocr-spinner"></div>
+                        <p id="ocrProgressText">解析识别中...</p>
+                    </div>
+                    <!-- OCR调试面板（默认折叠，内含原图预览） -->
+                    <div class="ocr-debug-panel" id="ocrDebugPanel" style="display:none;">
+                        <div class="ocr-debug-header" onclick="toggleOcrDebug()">
+                            <span>🔧 OCR调试信息</span>
+                            <span id="ocrDebugToggle">展开 ▼</span>
+                        </div>
+                        <div class="ocr-debug-body" id="ocrDebugBody" style="display:none;">
+                            <div class="image-preview" id="imagePreview" style="display:none;">
                         <div class="image-preview-toolbar" id="ocrToolbar">
                             <span class="toolbar-label">引擎：</span>
                             <button class="btn-ocr-engine active" data-engine="tesseract" onclick="setOCREngine('tesseract')" title="本地离线识别">💻</button>
@@ -557,17 +569,7 @@ async function handleRequest(request) {
                                 <canvas id="boxCanvas" class="box-canvas"></canvas>
                             </div>
                         </div>
-                        <div class="ocr-progress" id="ocrProgress" style="display:none;">
-                            <div class="ocr-spinner"></div>
-                            <p id="ocrProgressText">正在识别截图中的账单信息...</p>
-                        </div>
-                        <!-- OCR调试面板 -->
-                        <div class="ocr-debug-panel" id="ocrDebugPanel" style="display:none;">
-                            <div class="ocr-debug-header" onclick="toggleOcrDebug()">
-                                <span>🔧 OCR调试信息</span>
-                                <span id="ocrDebugToggle">展开 ▼</span>
-                            </div>
-                            <div class="ocr-debug-body" id="ocrDebugBody" style="display:none;">
+                            </div><!-- /#imagePreview -->
                                 <div class="debug-row">
                                     <span class="debug-label">检测类型：</span>
                                     <span class="debug-value" id="debugDetectedType">-</span>
@@ -615,7 +617,6 @@ async function handleRequest(request) {
                             </div>
                         </div>
                         <p class="box-ocr-hint" id="boxOcrHint" style="display:none;">在图片上拖拽绘制方框：红色=金额、蓝色=备注、绿色=日期。同一行的框会自动组合成一条账单，其他数字会被忽略。</p>
-                    </div>
                 </div>
                 <div class="form-group paste-area">
                     <label>或粘贴账单内容（Ctrl+V）：</label>
@@ -701,7 +702,7 @@ async function handleRequest(request) {
                                     <th id="previewCheckTh" style="width:36px;display:none;"><input type="checkbox" id="previewCheckAll" onchange="selectAllBatchDates(this.checked)" title="全选/取消全选"></th>
                                     <th>日期 <span style="cursor:pointer;font-size:14px;" onclick="toggleBatchDateMode()" title="批量修改日期">📅</span></th>
                                     <th>类型</th>
-                                    <th>金额</th>
+                                    <th class="col-amount">金额</th>
                                     <th>备注</th>
                                     <th style="width:50px;">操作</th>
                                 </tr>
