@@ -5892,20 +5892,34 @@ function ocrLocal(imageDataUrl) {
 //   在浏览器内完成检测/识别/账单解析，返回结构化 records，与本地模型服务(本地:9001)同款效果。
 var _browserOcrEngine = null;
 var _browserOcrInit = null;
+
+// 计算站点根目录（app.js 所在目录），用于把 ocr-web 资源拼成绝对 URL。
+// ⚠️ import() 的 specifier 必须是 './'、'/' 或绝对 URL 开头；
+// 写成 'ocr-web/ort/ort.wasm.min.mjs' 会被浏览器当成 npm 裸包名，
+// 直接报 Failed to resolve module specifier，导致强模型永远加载失败。
+function _ocrAssetBase() {
+    try {
+        var s = document.querySelector('script[src*="app.js"]');
+        if (s && s.src) return new URL('.', s.src).href;
+    } catch (e) {}
+    return new URL('./', location.href).href;
+}
+
 function ocrBrowser(imageDataUrl) {
     if (!_browserOcrInit) {
         _browserOcrInit = (async function() {
             showToast('🧠 正在加载本地强模型（首次需下载约30MB模型，请稍候）…', 'info', 6000);
-            var engMod = await import('./ocr-web/rapidocr-engine.js');
-            var parMod = await import('./ocr-web/bill-parser.js');
+            var _base = _ocrAssetBase();
+            var engMod = await import(_base + 'ocr-web/rapidocr-engine.js');
+            var parMod = await import(_base + 'ocr-web/bill-parser.js');
             var eng = new engMod.RapidOCREngine();
             await eng.init({
-                detUrl: 'ocr-web/models/PP-OCRv6_det_small.onnx',
-                recUrl: 'ocr-web/models/PP-OCRv6_rec_small.onnx',
-                clsUrl: 'ocr-web/models/ch_ppocr_mobile_v2.0_cls_mobile.onnx',
-                vocabUrl: 'ocr-web/models/ppocrv6_vocab.txt',
-                ortUrl: 'ocr-web/ort/ort.wasm.min.mjs',
-                wasmPaths: 'ocr-web/ort/'
+                detUrl: _base + 'ocr-web/models/PP-OCRv6_det_small.onnx',
+                recUrl: _base + 'ocr-web/models/PP-OCRv6_rec_small.onnx',
+                clsUrl: _base + 'ocr-web/models/ch_ppocr_mobile_v2.0_cls_mobile.onnx',
+                vocabUrl: _base + 'ocr-web/models/ppocrv6_vocab.txt',
+                ortUrl: _base + 'ocr-web/ort/ort.wasm.min.mjs',
+                wasmPaths: _base + 'ocr-web/ort/'
             });
             return { eng: eng, parseBills: parMod.parseBills };
         })();
