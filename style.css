@@ -2666,6 +2666,26 @@ div[id*="eop-banner"],
 .preview-table-wrap td.amount-income .preview-amount-input { color: #F59E0B; }
 .preview-table-wrap td.amount-balance .preview-amount-input { color: var(--primary); }
 
+/* 预览表格金额列：表头与数值居中对齐 + 收支正负号 */
+.preview-table th.col-amount { text-align: center; }
+.preview-table td.amount-cell { text-align: center; }
+.preview-table td.amount-cell .preview-amount-input {
+    width: 86px;
+    text-align: center;
+    display: inline-block;
+    vertical-align: middle;
+}
+.preview-table td.amount-cell .amount-sign {
+    display: inline-block;
+    vertical-align: middle;
+    font-weight: 600;
+    min-width: 8px;
+    text-align: center;
+}
+.preview-table td.amount-cell.amount-expense .amount-sign { color: var(--text); }
+.preview-table td.amount-cell.amount-income .amount-sign { color: #F59E0B; }
+.preview-table td.amount-cell.amount-balance .amount-sign { color: var(--primary); }
+
 /* 手机端导出按钮适配 */
 @media (max-width: 768px) {
     .export-dropdown {
