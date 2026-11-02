@@ -3041,6 +3041,30 @@ function closeImportModal() {
     window._previewBills = [];
 }
 
+// 未选择账单户时：高频闪烁下拉框 + 滚动定位 + 轻提示
+function _blinkImportUser() {
+    var sel = document.getElementById('importUser');
+    if (!sel) return;
+    sel.classList.remove('blink-warn');
+    void sel.offsetWidth; // 强制重排，让动画可以重复播放
+    sel.classList.add('blink-warn');
+    try { sel.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (e) { try { sel.scrollIntoView(); } catch (e2) {} }
+    try { sel.focus({ preventScroll: true }); } catch (e) {}
+    setTimeout(function() { sel.classList.remove('blink-warn'); }, 3000);
+    showToast('请先选择账单户，否则无法导入', 'error');
+}
+
+// 用户补选账单户后，同步预览数据并重新检测重复
+function onImportUserChange() {
+    var v = document.getElementById('importUser').value;
+    if (!v) return;
+    window._previewUserId = v;
+    if (window._previewBills && window._previewBills.length) {
+        showPreview(window._previewBills, v);
+        showToast('已选择账单户，可以点「确认导入」了', 'success');
+    }
+}
+
 // ==================== 文件拖拽 ====================
 (function() {
     var dropZone = document.getElementById('fileDropZone');
@@ -3077,7 +3101,7 @@ function processFile(file) {
         reader.readAsText(file, 'UTF-8');
     } else if (ext === 'xlsx' || ext === 'xls') {
         var userId = document.getElementById('importUser').value;
-        if (!userId) { showToast('请先选择账单户', 'error'); return; }
+        if (!userId) { _blinkImportUser(); }
         var reader = new FileReader();
         reader.onload = function(e) {
             try {
@@ -3217,7 +3241,7 @@ function handlePastedContent() {
 // ==================== 文本解析（CSV/TXT/Excel/粘贴） ====================
 function parseTextContent(text, sourceName) {
     var userId = document.getElementById('importUser').value;
-    if (!userId) { showToast('请先选择账单户', 'error'); return; }
+    if (!userId) { _blinkImportUser(); }
 
     var lines = text.split(/\n/).filter(function(l) { return l.trim(); });
     var bills = [];
@@ -4416,11 +4440,17 @@ function calcFill() {
 }
 
 function confirmImport() {
-    var userId = window._previewUserId;
+    var selectEl = document.getElementById('importUser');
+    var userId = window._previewUserId || (selectEl ? selectEl.value : '');
     var bills = window._previewBills;
     var dupResults = window._dupResults || [];
-    if (!userId || !bills || bills.length === 0) {
+    if (!bills || bills.length === 0) {
         showToast('没有可导入的数据', 'error');
+        return;
+    }
+    if (!userId) {
+        // 允许先上传文件再选账单户，但导入前必须选定
+        _blinkImportUser();
         return;
     }
 
@@ -5450,7 +5480,7 @@ function ocrTesseract(imageDataUrl, options) {
 // ==================== 重新识别（切换引擎后对当前图片重新OCR） ====================
 function reRecognize() {
     var userId = document.getElementById('importUser').value;
-    if (!userId) { showToast('请先选择账单户', 'error'); return; }
+    if (!userId) { _blinkImportUser(); }
 
     var file = window._currentOCRFile;
     if (!file) { showToast('没有已加载的图片', 'error'); return; }
@@ -5509,7 +5539,7 @@ function reRecognize() {
 
 function processImageOCR(file) {
     var userId = document.getElementById('importUser').value;
-    if (!userId) { showToast('请先选择账单户', 'error'); return; }
+    if (!userId) { _blinkImportUser(); }
 
     // 重置学习修正信息
     window._ocrCorrectionInfo = null;
@@ -7062,7 +7092,7 @@ function recognizeBoxes() {
         return;
     }
     var userId = document.getElementById('importUser').value;
-    if (!userId) { showToast('请先选择账单户', 'error'); return; }
+    if (!userId) { _blinkImportUser(); }
 
     var file = window._currentOCRFile;
     if (!file) {
