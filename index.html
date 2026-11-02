@@ -11,7 +11,7 @@
     <link rel="manifest" href="manifest.json">
     <link rel="icon" type="image/png" href="favicon-32.png">
     <link rel="apple-touch-icon" href="apple-touch-icon.png">
-    <link rel="stylesheet" href="style.css?v=34">
+    <link rel="stylesheet" href="style.css?v=35">
     <!-- CDN 库异步加载，不阻塞页面渲染 -->
     <script>
     (function loadCdnLibs() {
@@ -57,7 +57,19 @@
     </script>
     <script>
         // 注册版本号需与 sw.js 的 CACHE_NAME 同步，升级时一并修改，确保浏览器拉取到最新 SW
-        if ('serviceWorker' in navigator) { navigator.serviceWorker.register('sw.js?v=45').catch(() => {}); }
+        (function swRegister() {
+            if (!('serviceWorker' in navigator)) return;
+            // 已有 SW 接管时：新 SW 接管后自动刷一次，避免继续跑旧缓存代码
+            if (navigator.serviceWorker.controller) {
+                var reloadedFlag = 'sw_reload_v46';
+                navigator.serviceWorker.addEventListener('controllerchange', function() {
+                    if (sessionStorage.getItem(reloadedFlag) === '1') return;
+                    sessionStorage.setItem(reloadedFlag, '1');
+                    location.reload();
+                });
+            }
+            navigator.serviceWorker.register('sw.js?v=46').catch(function() {});
+        })();
         (function removeSafetyBanner() {
             const observer = new MutationObserver(function() {
                 const banners = document.querySelectorAll('div[style*="fixed"]');
@@ -1011,7 +1023,7 @@ async function handleRequest(request) {
     <!-- Toast 提示 -->
     <div class="toast" id="toast"></div>
 
-    <script src="app.js?v=49"></script>
+    <script src="app.js?v=50"></script>
     <script>
     (function(){
         function showForgot(){

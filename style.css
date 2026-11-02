@@ -2668,23 +2668,26 @@ div[id*="eop-banner"],
 
 /* 预览表格金额列：表头与数值居中对齐（正负号直接写进输入框，紧贴数字，字号一致） */
 .preview-table th.col-amount { text-align: center; }
-.preview-table td.amount-cell { text-align: center; }
+.preview-table td.amount-cell { text-align: center; white-space: nowrap; }
 .preview-table td.amount-cell .preview-amount-input {
     width: 96px;
     text-align: center;
     display: inline-block;
     vertical-align: middle;
     font-weight: 600;
-    letter-spacing: 0.3px;
+    letter-spacing: 0;
+    padding: 2px 2px;
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum";
 }
 
-/* 未选择账单户时：下拉框高频闪烁提醒 */
+/* 未选择账单户时：下拉框持续闪烁，直到用户选择了账单户为止 */
 @keyframes importUserBlink {
     0%, 100% { border-color: var(--border); box-shadow: none; background: #FFF; }
     50% { border-color: #EF4444; box-shadow: 0 0 0 4px rgba(239,68,68,0.22); background: #FFF5F5; }
 }
 #importUser.blink-warn {
-    animation: importUserBlink 0.4s ease-in-out 7;
+    animation: importUserBlink 0.9s ease-in-out infinite !important;
 }
 
 /* 手机端导出按钮适配 */
