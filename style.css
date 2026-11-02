@@ -2666,39 +2666,17 @@ div[id*="eop-banner"],
 .preview-table-wrap td.amount-income .preview-amount-input { color: #F59E0B; }
 .preview-table-wrap td.amount-balance .preview-amount-input { color: var(--primary); }
 
-/* 预览表格金额列：表头与数值居中对齐 + 收支正负号 */
+/* 预览表格金额列：表头与数值居中对齐（正负号直接写进输入框，紧贴数字，字号一致） */
 .preview-table th.col-amount { text-align: center; }
 .preview-table td.amount-cell { text-align: center; }
 .preview-table td.amount-cell .preview-amount-input {
-    width: 78px;
+    width: 96px;
     text-align: center;
     display: inline-block;
     vertical-align: middle;
+    font-weight: 600;
+    letter-spacing: 0.3px;
 }
-.preview-table td.amount-cell .amount-sign {
-    display: inline-block;
-    vertical-align: middle;
-    font-size: 15px;
-    line-height: 1;
-    font-weight: 700;
-    min-width: 0;
-    margin-right: 1px;
-    text-align: center;
-}
-/* 输入框宽度跟随内容自适应，让正负号紧贴金额数字且整体居中 */
-@supports (field-sizing: content) {
-    .preview-table td.amount-cell .preview-amount-input {
-        width: auto;
-        min-width: 1.6em;
-        field-sizing: content;
-        text-align: left;
-        padding-left: 0;
-        padding-right: 2px;
-    }
-}
-.preview-table td.amount-cell.amount-expense .amount-sign { color: var(--text); }
-.preview-table td.amount-cell.amount-income .amount-sign { color: #F59E0B; }
-.preview-table td.amount-cell.amount-balance .amount-sign { color: var(--primary); }
 
 /* 未选择账单户时：下拉框高频闪烁提醒 */
 @keyframes importUserBlink {
