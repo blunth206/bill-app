@@ -1,5 +1,5 @@
 // Service Worker - PWA 离线缓存（v20：CDN资源缓存，支持弱网/离线启动）
-const CACHE_NAME = 'jizhang-v47';
+const CACHE_NAME = 'jizhang-v48';
 const FILES_TO_CACHE = [
   '.',
   'index.html',
