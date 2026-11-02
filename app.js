@@ -5881,8 +5881,8 @@ function ocrBrowser(imageDataUrl) {
                 recUrl: 'ocr-web/models/PP-OCRv6_rec_small.onnx',
                 clsUrl: 'ocr-web/models/ch_ppocr_mobile_v2.0_cls_mobile.onnx',
                 vocabUrl: 'ocr-web/models/ppocrv6_vocab.txt',
-                ortUrl: 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.wasm.min.mjs',
-                wasmPaths: 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/'
+                ortUrl: 'ocr-web/ort/ort.wasm.min.mjs',
+                wasmPaths: 'ocr-web/ort/'
             });
             return { eng: eng, parseBills: parMod.parseBills };
         })();
