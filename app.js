@@ -247,6 +247,8 @@ function syncPush(retryCount) {
         updateSyncStatus('已同步');
         console.log('[同步] 推送成功! ' + localBillCount + '条账单');
         if (attempt > 0) showToast('云端同步成功', 'success');
+        // 顺带生成一份云端快照（受间隔限制；失败不影响主同步）
+        try { backupToGitHub(false); } catch (e) {}
         return r;
     }).catch(function(e) {
         // 只有 409 云端冲突才重试，且先拉取合并后再推送
@@ -265,6 +267,106 @@ function syncPush(retryCount) {
         throw e;
     }).finally(function() {
         _IS_SYNCING = false;
+    });
+}
+
+// ==================== GitHub 自动快照备份 ====================
+// 说明：sync-data.json 始终是最新实时数据；这里另外按「日期时间」生成快照，
+// 只保留最近 N 份，循环覆盖，用于数据被误清空后回滚。
+var _BACKUP_DIR = '/repos/' + _SYNC_REPO + '/contents/backups';
+var _BACKUP_KEEP = 20;                       // 保留份数
+var _BACKUP_INTERVAL_MS = 60 * 60 * 1000;    // 最快每 60 分钟一份（调小则历史更短、仓库提交更多）
+var _LAST_BACKUP_AT = 0;
+var _BACKUP_RUNNING = false;
+try { _LAST_BACKUP_AT = parseInt(localStorage.getItem('billApp_lastBackupAt') || '0', 10) || 0; } catch (e) {}
+
+function _pad2(n) { return (n < 10 ? '0' : '') + n; }
+
+function updateBackupStatus(text) {
+    var el = document.getElementById('backupStatus');
+    if (el && typeof text === 'string') el.textContent = text;
+}
+
+// force=true 时忽略间隔限制（设置页「立即备份」按钮）
+function backupToGitHub(force) {
+    if (!_SYNC_READY || _BACKUP_RUNNING) return Promise.resolve(false);
+    if (!force && _LAST_BACKUP_AT && (Date.now() - _LAST_BACKUP_AT) < _BACKUP_INTERVAL_MS) {
+        return Promise.resolve(false);
+    }
+    if (!APP_DATA.bills || APP_DATA.bills.length === 0) return Promise.resolve(false); // 空数据绝不备份
+
+    _BACKUP_RUNNING = true;
+    var d = new Date();
+    var name = 'backup-' + d.getFullYear() + _pad2(d.getMonth() + 1) + _pad2(d.getDate()) +
+        '-' + _pad2(d.getHours()) + _pad2(d.getMinutes()) + _pad2(d.getSeconds()) + '.json';
+    var backup = {
+        version: 1,
+        exportedAt: d.toISOString(),
+        accounts: APP_DATA.accounts,
+        billUsers: APP_DATA.billUsers,
+        bills: APP_DATA.bills
+    };
+    var content = JSON.stringify(backup);
+    var body = {
+        message: 'backup: ' + d.toLocaleString() + ' (' + APP_DATA.bills.length + ' 条)',
+        content: btoa(unescape(encodeURIComponent(content)))
+    };
+
+    return _apiFetch('PUT', _BACKUP_DIR + '/' + name, body).then(function() {
+        _LAST_BACKUP_AT = Date.now();
+        try { localStorage.setItem('billApp_lastBackupAt', String(_LAST_BACKUP_AT)); } catch (e) {}
+        console.log('[备份] 云端快照成功:', name, APP_DATA.bills.length + '条');
+        if (force) showToast('已备份到云端：' + name, 'success');
+        updateBackupStatus('最近备份：' + name + '（' + APP_DATA.bills.length + ' 条）');
+        return pruneGitHubBackups();
+    }).catch(function(e) {
+        console.error('[备份] 失败:', e);
+        if (force) showToast('云端备份失败：' + (e.message || '网络错误'), 'error');
+        else updateBackupStatus('自动备份失败（下次同步后重试）');
+        return false;
+    }).finally(function() {
+        _BACKUP_RUNNING = false;
+    });
+}
+
+// 只保留最近 _BACKUP_KEEP 份，删除更早的
+function pruneGitHubBackups() {
+    return _apiFetch('GET', _BACKUP_DIR).then(function(list) {
+        if (!Array.isArray(list)) return false;
+        var files = list.filter(function(f) {
+            return f && f.name && /^backup-.*\.json$/.test(f.name);
+        }).sort(function(a, b) {
+            return a.name < b.name ? 1 : (a.name > b.name ? -1 : 0); // 新 → 旧
+        });
+        var old = files.slice(_BACKUP_KEEP);
+        updateBackupStatus('云端快照 ' + files.length + ' 份（自动保留最近 ' + _BACKUP_KEEP + ' 份）');
+        if (!old.length) return true;
+        return old.reduce(function(p, f) {
+            return p.then(function() {
+                return _apiFetch('DELETE', _BACKUP_DIR + '/' + f.name, {
+                    message: 'prune old backup: ' + f.name,
+                    sha: f.sha
+                }).catch(function() { return null; });
+            });
+        }, Promise.resolve()).then(function() {
+            console.log('[备份] 已清理旧快照 ' + old.length + ' 份');
+            return true;
+        });
+    }).catch(function(e) {
+        console.warn('[备份] 清理旧快照失败:', e && e.message);
+        return false;
+    });
+}
+
+// 设置页：读取云端快照状态
+function refreshBackupStatus() {
+    if (!_SYNC_READY) { updateBackupStatus('未配置 Token，无法备份'); return; }
+    updateBackupStatus('正在读取云端快照...');
+    _apiFetch('GET', _BACKUP_DIR).then(function(list) {
+        var n = Array.isArray(list) ? list.filter(function(f) { return /^backup-.*\.json$/.test(f.name); }).length : 0;
+        updateBackupStatus('云端快照 ' + n + ' 份（自动保留最近 ' + _BACKUP_KEEP + ' 份）');
+    }).catch(function() {
+        updateBackupStatus('读取云端快照失败');
     });
 }
 
@@ -3644,45 +3746,105 @@ function parseExcelDate(val) {
 }
 
 // ==================== 重复数据检测 ====================
+// 去除 OCR 字间距：Tesseract / 云 OCR 常在中文与中文之间插入空格，这里只清理这类空白，
+// 保留英文/数字/符号之间正常的空格（用于预览显示，不破坏原意）
+function normalizeOcrNote(s) {
+    if (s == null) return '';
+    var t = String(s).replace(/\u3000/g, ' ');
+    // 中文 + 空白 + 中文 → 去掉空白
+    t = t.replace(/([\u4e00-\u9fa5])[ \t]+(?=[\u4e00-\u9fa5])/g, '$1');
+    // 中文与中文标点之间的空白
+    t = t.replace(/([\u4e00-\u9fa5])[ \t]+(?=[，。、；：！？（）【】《》])/g, '$1');
+    t = t.replace(/([，。、；：！？（）【】《》])[ \t]+(?=[\u4e00-\u9fa5])/g, '$1');
+    // 合并多余空格
+    t = t.replace(/[ \t]{2,}/g, ' ').trim();
+    return t;
+}
+
+// 比对用归一化：在 normalizeOcrNote 基础上再去掉所有空白与标点，避免因 OCR 标点差异漏判
+function _dupNormText(s) {
+    return normalizeOcrNote(s).replace(/[\s,，。.、;；:：\-—_·…()（）【】\[\]]+/g, '').trim();
+}
+
+// 日期归一化：2026/10/30、2026.10.30、2026年10月30日 → 2026-10-30
+function _dupNormDate(s) {
+    var t = String(s == null ? '' : s).trim();
+    var m = t.match(/^(\d{4})\s*[-/.年]\s*(\d{1,2})\s*[-/.月]\s*(\d{1,2})/);
+    if (m) {
+        return m[1] + '-' + ('0' + m[2]).slice(-2) + '-' + ('0' + m[3]).slice(-2);
+    }
+    return t;
+}
+
+// 重复判定键：归一日期的 + 类型 + 金额（精确到分）
+function _dupKey(b) {
+    var amount = Math.round((Number(b && b.amount) || 0) * 100) / 100;
+    return _dupNormDate(b && b.date) + '|' + String((b && b.type) || '').trim() + '|' + amount.toFixed(2);
+}
+
 function checkDuplicates(bills, userId) {
-    // 对每条待导入账单，检查是否与已有数据重复
-    // 判定标准：同一账单户 + 同一日期 + 同一类型 + 金额相同(容差0.01)
-    // 备注用于区分同名交易，但如果日期+类型+金额都相同，即使备注不同也标记为疑似重复
-    var existing = APP_DATA.bills.filter(function(ex) {
-        return ex.userId === userId;
+    // 判定标准：同一账单户 + 同一日期 + 同一类型 + 金额相同(精确到分)
+    // 备注用于区分同名交易：日期+类型+金额都相同 → 疑似重复；备注也匹配 → 确认重复
+    // 注意：userId 为空时无法比对已有数据，此时仍会做「本批次内部」去重
+    var uid = userId || '';
+    var existing = uid ? APP_DATA.bills.filter(function(ex) {
+        return ex.userId === uid;
+    }) : [];
+
+    // 预建已有数据索引（同 key 取第一条），避免每条都全表扫描
+    var existingMap = {};
+    existing.forEach(function(ex) {
+        var k = _dupKey(ex);
+        if (!existingMap[k]) existingMap[k] = ex;
     });
+
+    // 本批次内部去重：同一 key 第二次出现即视为重复（防止同一张截图被重复解析）
+    var batchSeen = {};
+
     return bills.map(function(bill) {
-        var dup = existing.find(function(ex) {
-            if (ex.date !== bill.date) return false;
-            if (ex.type !== bill.type) return false;
-            if (Math.abs((ex.amount || 0) - (bill.amount || 0)) > 0.01) return false;
-            return true;
-        });
-        // 如果日期+类型+金额都匹配，标记为重复
-        // 如果备注也匹配（完全相同或包含关系），则确认重复
+        var key = _dupKey(bill);
+        var dup = existingMap[key] || null;
+        var inBatch = null;
+        if (!dup) {
+            if (batchSeen[key]) inBatch = batchSeen[key];
+            else batchSeen[key] = bill;
+        }
+        var ref = dup || inBatch;
         var noteMatch = false;
-        if (dup) {
-            var n1 = (dup.note || '').trim();
-            var n2 = (bill.note || '').trim();
+        if (ref) {
+            var n1 = _dupNormText(ref.note);
+            var n2 = _dupNormText(bill.note);
             // 一方为空、完全相同、或一方包含另一方都算备注匹配
             if (!n1 || !n2 || n1 === n2 || n1.indexOf(n2) >= 0 || n2.indexOf(n1) >= 0) {
                 noteMatch = true;
             }
         }
         return {
-            isDuplicate: !!dup,
+            isDuplicate: !!ref,
             noteMatch: noteMatch,
-            matchedId: dup ? dup.id : null,
-            matchedNote: dup ? (dup.note || '') : '',
-            matchedDate: dup ? (dup.date || '') : '',
-            matchedType: dup ? (dup.type || '') : '',
-            matchedAmount: dup ? (dup.amount || 0) : 0
+            inBatch: !!inBatch,
+            matchedId: ref ? ref.id : null,
+            matchedNote: ref ? (ref.note || '') : '',
+            matchedDate: ref ? (ref.date || '') : '',
+            matchedType: ref ? (ref.type || '') : '',
+            matchedAmount: ref ? (ref.amount || 0) : 0
         };
     });
 }
 
 // ==================== 预览与确认导入 ====================
 function showPreview(bills, userId) {
+    // 自动去除 OCR 字间距（中文与中文之间的空格）
+    if (Array.isArray(bills)) {
+        bills.forEach(function(b) {
+            if (b && typeof b.note === 'string') b.note = normalizeOcrNote(b.note);
+        });
+    }
+    // userId 未传时回退到下拉框当前值，避免用空 userId 比对导致重复检测全部失效
+    if (!userId) {
+        var _sel = document.getElementById('importUser');
+        if (_sel && _sel.value) userId = _sel.value;
+    }
     window._previewBills = bills;
     window._previewUserId = userId;
 
@@ -3760,6 +3922,8 @@ function showPreview(bills, userId) {
             '<td class="amount-cell ' + amountClass + '"><input type="text" inputmode="decimal" class="preview-amount-input" value="' + amountSign + amountText + '" data-idx="' + idx + '" data-orig="' + amountText + '" onchange="updatePreviewAmount(' + idx + ', this.value);recheckDuplicates();" onblur="handleAmountBlur(this, ' + idx + ');" onkeydown="handleAmountKeydown(event, this, ' + idx + ');">' + amountBadge + '</td>' +
             '<td><input type="text" class="preview-note-input" value="' + (b.note || '') + '" data-idx="' + idx + '" onchange="updatePreviewNote(' + idx + ', this.value);recheckDuplicates();" onkeydown="handlePreviewNoteKeydown(event, this, ' + idx + ');">' + noteBadge + dupIcon + '</td>' +
             '<td style="white-space:nowrap;">' +
+            '<button onclick="movePreviewRow(' + idx + ',-1)" title="上移" style="background:none;border:none;cursor:pointer;font-size:15px;padding:2px 5px;color:#888;border-radius:4px;">↑</button>' +
+            '<button onclick="movePreviewRow(' + idx + ',1)" title="下移" style="background:none;border:none;cursor:pointer;font-size:15px;padding:2px 5px;color:#888;border-radius:4px;">↓</button>' +
             '<button class="btn-learn-save" onclick="saveAsLearningRule(' + idx + ', this)" title="记住此次修正，下次同款截屏自动识别">📘</button>' +
             '<button class="btn-del-row" onclick="deletePreviewRow(' + idx + ')" title="删除此行" style="background:none;border:none;cursor:pointer;font-size:18px;padding:4px 8px;color:#999;border-radius:4px;">&times;</button></td>' +
             '</tr>';
@@ -4339,6 +4503,20 @@ function updatePreviewType(idx, val) {
     if (amtInput) _applyAmountSignToInput(amtInput, idx);
 }
 
+// 调整预览行顺序：上移(-1) / 下移(+1)
+function movePreviewRow(idx, delta) {
+    var arr = window._previewBills;
+    if (!arr || !arr.length) return;
+    var j = idx + delta;
+    if (j < 0 || j >= arr.length) return;
+    var tmp = arr[idx];
+    arr[idx] = arr[j];
+    arr[j] = tmp;
+    // 顺序变化后按索引保存的手动判定会错位，清空重算
+    window._dupOverrides = {};
+    showPreview(arr, window._previewUserId);
+}
+
 function deletePreviewRow(idx) {
     if (!window._previewBills) return;
     window._previewBills.splice(idx, 1);
@@ -4529,7 +4707,6 @@ function confirmImport() {
     var selectEl = document.getElementById('importUser');
     var userId = window._previewUserId || (selectEl ? selectEl.value : '');
     var bills = window._previewBills;
-    var dupResults = window._dupResults || [];
     if (!bills || bills.length === 0) {
         showToast('没有可导入的数据', 'error');
         return;
@@ -4538,6 +4715,38 @@ function confirmImport() {
         // 允许先上传文件再选账单户，但导入前必须选定
         _blinkImportUser();
         return;
+    }
+    window._previewUserId = userId;
+
+    // 关键修复：用最终确定的账单户重新检测重复。
+    // 预览时若还没选账单户（userId 为空），那时的检测结果不可靠，必须重算。
+    var dupResults = checkDuplicates(bills, userId);
+    if (window._dupOverrides) {
+        Object.keys(window._dupOverrides).forEach(function(k) {
+            var i = parseInt(k, 10);
+            if (!dupResults[i]) return;
+            if (window._dupOverrides[k] === 'confirm') {
+                dupResults[i].isDuplicate = true;
+                dupResults[i].noteMatch = true;
+            } else if (window._dupOverrides[k] === 'dismiss') {
+                dupResults[i].isDuplicate = false;
+                dupResults[i].noteMatch = false;
+            }
+        });
+    }
+    window._dupResults = dupResults;
+
+    var dupCount = dupResults.filter(function(d) { return d.isDuplicate; }).length;
+    var existDupCount = dupResults.filter(function(d) { return d.isDuplicate && !d.inBatch; }).length;
+    var batchDupCount = dupResults.filter(function(d) { return d.isDuplicate && d.inBatch; }).length;
+
+    // 导入前给出明确警告（不能只靠顶部小横条，容易被忽略）
+    if (dupCount > 0) {
+        var tip = '⚠️ 检测到 ' + dupCount + ' 条重复记录\n\n';
+        if (existDupCount > 0) tip += '· 与已有账单重复：' + existDupCount + ' 条\n';
+        if (batchDupCount > 0) tip += '· 本次导入内部重复：' + batchDupCount + ' 条\n';
+        tip += '\n点「确定」自动跳过这些重复，只导入其余 ' + (bills.length - dupCount) + ' 条；\n点「取消」返回预览检查（可用「排除重复」或手动删行）。';
+        if (!confirm(tip)) return;
     }
 
     var count = 0;
@@ -4563,6 +4772,12 @@ function confirmImport() {
         initBillFieldTimestamps(APP_DATA.bills[APP_DATA.bills.length - 1]);
         count++;
     });
+
+    if (count === 0) {
+        showToast('全部 ' + skipCount + ' 条均为重复数据，未导入任何记录', 'info');
+        return;
+    }
+
     saveData();
     closeImportModal();
     
