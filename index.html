@@ -61,14 +61,14 @@
             if (!('serviceWorker' in navigator)) return;
             // 已有 SW 接管时：新 SW 接管后自动刷一次，避免继续跑旧缓存代码
             if (navigator.serviceWorker.controller) {
-                var reloadedFlag = 'sw_reload_v46';
+                var reloadedFlag = 'sw_reload_v47';
                 navigator.serviceWorker.addEventListener('controllerchange', function() {
                     if (sessionStorage.getItem(reloadedFlag) === '1') return;
                     sessionStorage.setItem(reloadedFlag, '1');
                     location.reload();
                 });
             }
-            navigator.serviceWorker.register('sw.js?v=46').catch(function() {});
+            navigator.serviceWorker.register('sw.js?v=47').catch(function() {});
         })();
         (function removeSafetyBanner() {
             const observer = new MutationObserver(function() {
@@ -1023,7 +1023,7 @@ async function handleRequest(request) {
     <!-- Toast 提示 -->
     <div class="toast" id="toast"></div>
 
-    <script src="app.js?v=50"></script>
+    <script src="app.js?v=51"></script>
     <script>
     (function(){
         function showForgot(){
