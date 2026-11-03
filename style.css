@@ -531,6 +531,29 @@ body {
     box-shadow: 0 0 0 4px rgba(74, 144, 217, 0.25), 0 2px 8px rgba(74, 144, 217, 0.2);
 }
 
+/* 汇总页列表搜索框 */
+.filter-search-input {
+    padding: 8px 14px;
+    border: 2px solid var(--border, #e2e8f0);
+    border-radius: 10px;
+    font-size: 14px;
+    min-width: 220px;
+    outline: none;
+    background: #fff;
+    transition: border-color 0.2s, box-shadow 0.2s;
+}
+.filter-search-input:focus {
+    border-color: var(--primary, #4A90D9);
+    box-shadow: 0 0 0 3px rgba(74, 144, 217, 0.18);
+}
+
+/* 录入时间列 */
+.created-cell {
+    white-space: nowrap;
+    color: var(--text-secondary, #64748b);
+    font-size: 12px;
+}
+
 /* 时间模式按钮 */
 .time-mode-btns {
     display: flex;

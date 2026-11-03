@@ -68,7 +68,7 @@
                     location.reload();
                 });
             }
-            navigator.serviceWorker.register('sw.js?v=52').catch(function() {});
+            navigator.serviceWorker.register('sw.js?v=53').catch(function() {});
         })();
         (function removeSafetyBanner() {
             const observer = new MutationObserver(function() {
@@ -184,6 +184,7 @@
                             <option value="支出">仅支出</option>
                             <option value="结余">仅结余</option>
                         </select>
+                        <input type="text" id="homeSearchInput" class="filter-search-input" placeholder="🔍 搜索 金额/备注/类型" oninput="onFilterChange()">
                         <div class="time-mode-btns">
                             <button class="time-mode-btn active" data-mode="month" onclick="setTimeMode('month')">按月</button>
                             <button class="time-mode-btn" data-mode="year" onclick="setTimeMode('year')">按年</button>
@@ -251,6 +252,7 @@
                                 <th data-col="amount">金额</th>
                                 <th data-col="note">备注</th>
                                 <th data-col="source">来源</th>
+                                <th data-col="created">录入时间</th>
                                 <th data-col="action" class="col-action">操作</th>
                             </tr>
                         </thead>
@@ -1062,7 +1064,7 @@ async function handleRequest(request) {
     <!-- Toast 提示 -->
     <div class="toast" id="toast"></div>
 
-    <script src="app.js?v=56"></script>
+    <script src="app.js?v=57"></script>
     <script>
     (function(){
         function showForgot(){

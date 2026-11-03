@@ -943,6 +943,16 @@ function formatDate(dateStr) {
     return y + '-' + m + '-' + day;
 }
 
+// 录入/导入时间（毫秒时间戳 → "YYYY-MM-DD HH:mm"），缺字段时返回 —
+function formatDateTime(ts) {
+    if (!ts) return '—';
+    var d = new Date(ts);
+    if (isNaN(d.getTime())) return '—';
+    var p = function(n) { return String(n).padStart(2, '0'); };
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) +
+        ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+}
+
 // ==================== 登录系统 ====================
 // 紧急恢复：手动创建默认管理员账号
 function emergencyCreateAdmin() {
@@ -1306,6 +1316,7 @@ function getFilterDateRange() {
 
 function renderHomeView() {
     initColumnResize();
+    var searchKw = '';
     var filterUser = document.getElementById('homeUserFilter').value;
 
     // 更新筛选下拉
@@ -1347,6 +1358,22 @@ function renderHomeView() {
         filtered = filtered.filter(function(b) { return b.type === filterType; });
     }
 
+    // 关键词搜索（金额/备注/类型/来源/日期/账单户）：只作用于下方列表，不改变汇总口径
+    var searchEl = document.getElementById('homeSearchInput');
+    var kw = (searchEl ? (searchEl.value || '') : '').trim().toLowerCase();
+    searchKw = kw;
+    if (kw) {
+        filtered = filtered.filter(function(b) {
+            var u = APP_DATA.billUsers.find(function(x) { return x.id === b.userId; });
+            var hay = [
+                (b.note || ''), (b.type || ''), (b.source || ''),
+                formatDate(b.date), String(b.amount), formatMoney(b.amount),
+                u ? u.name : ''
+            ].join(' ').toLowerCase();
+            return hay.indexOf(kw) !== -1;
+        });
+    }
+
     // 排序：按日期降序
     filtered.sort(function(a, b) { return b.date.localeCompare(a.date) || b.createdAt - a.createdAt; });
 
@@ -1385,6 +1412,12 @@ function renderHomeView() {
     if (filterType !== 'all') {
         filterSubText += '<div style="margin-top:6px;text-align:center;font-size:12px;color:#888;white-space:nowrap;">' +
             '列表已筛选：仅显示「' + filterType + '」，共 ' + filtered.length + ' 条' +
+        '</div>';
+    }
+    // 关键词搜索提示
+    if (searchKw) {
+        filterSubText += '<div style="margin-top:6px;text-align:center;font-size:12px;color:#888;white-space:nowrap;">' +
+            '搜索「' + (searchEl ? searchEl.value.trim() : '') + '」命中 ' + filtered.length + ' 条' +
         '</div>';
     }
 
@@ -1440,6 +1473,7 @@ function renderHomeView() {
                 '<td class="' + amountClass + '">¥' + formatMoney(b.amount) + '</td>' +
                 '<td class="note-cell" title="' + (b.note || '') + '" onclick="openDetailModal(\'' + b.id + '\')">' + (b.note || '-') + '</td>' +
                 '<td><span class="source-badge ' + sourceClass + '">' + (b.source || '手动') + '</span></td>' +
+                '<td class="created-cell" style="white-space:nowrap;color:var(--text-secondary);font-size:12px;">' + formatDateTime(b.createdAt) + '</td>' +
                 '<td><div class="action-btns">' +
                     '<button class="btn-view" onclick="openDetailModal(\'' + b.id + '\')">查看</button>' +
                     '<button class="btn-edit" onclick="openEditBillModal(\'' + b.id + '\')">编辑</button>' +
@@ -1730,6 +1764,8 @@ function resetHomeFilter() {
     document.getElementById('homeUserFilter').value = 'all';
     var typeSel = document.getElementById('homeTypeFilter');
     if (typeSel) typeSel.value = 'all';
+    var searchSel = document.getElementById('homeSearchInput');
+    if (searchSel) searchSel.value = '';
     document.getElementById('homeDateFrom').value = '';
     document.getElementById('homeDateTo').value = '';
     var now = new Date();
