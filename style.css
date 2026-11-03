@@ -1858,6 +1858,79 @@ body {
     color: #fff;
 }
 
+/* 跨账单户重复提示：允许换行显示明细 */
+#dupWarningText {
+    flex: 1 1 260px;
+    min-width: 0;
+}
+#dupWarningText > div {
+    line-height: 1.5;
+}
+
+/* ==================== 最近一次导入的补救条 ==================== */
+.last-import-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    padding: 10px 14px;
+    margin: 12px 0;
+    background: #eef6ff;
+    border: 1.5px solid #93c5fd;
+    border-radius: 10px;
+    font-size: 13px;
+    color: #1e40af;
+}
+
+.last-import-text strong {
+    color: #1d4ed8;
+    font-size: 15px;
+}
+
+.last-import-hint {
+    margin-left: 8px;
+    color: #64748b;
+    font-size: 12px;
+}
+
+.last-import-bar .filter-user-select {
+    min-width: 140px;
+    padding: 6px 10px;
+    font-size: 13px;
+}
+
+.last-import-btn {
+    padding: 6px 12px;
+    border: 1px solid #93c5fd;
+    background: #fff;
+    color: #1d4ed8;
+    border-radius: 8px;
+    font-size: 13px;
+    cursor: pointer;
+    transition: background .15s, color .15s;
+}
+
+.last-import-btn:hover {
+    background: #dbeafe;
+}
+
+.last-import-btn.danger {
+    border-color: #fca5a5;
+    color: #dc2626;
+}
+
+.last-import-btn.danger:hover {
+    background: #fee2e2;
+}
+
+.last-import-btn.ghost {
+    border-color: transparent;
+    background: transparent;
+    color: #94a3b8;
+    font-size: 16px;
+    padding: 2px 8px;
+}
+
 /* 预览表格重复行 */
 #previewTbody tr.dup-row {
     background: #fff8e6 !important;

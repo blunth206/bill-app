@@ -1444,6 +1444,9 @@ function renderHomeView() {
             '<div class="card-value" style="color:var(--text);">' + filtered.length + ' 条</div>' +
         '</div>' + filterSubText;
 
+    // 最近一次导入的补救条（更改账单户 / 撤回本次导入）
+    renderLastImportBar();
+
     // 渲染表格
     var tbody = document.getElementById('homeBillTbody');
     var emptyEl = document.getElementById('homeEmpty');
@@ -3859,16 +3862,19 @@ function checkDuplicates(bills, userId) {
     // 判定标准：同一账单户 + 同一日期 + 同一类型 + 金额相同(精确到分)
     // 备注用于区分同名交易：日期+类型+金额都相同 → 疑似重复；备注也匹配 → 确认重复
     // 注意：userId 为空时无法比对已有数据，此时仍会做「本批次内部」去重
+    // 跨账单户也会检测（只提示、不自动删）：导入前选错账单户时能立刻发现
     var uid = userId || '';
-    var existing = uid ? APP_DATA.bills.filter(function(ex) {
-        return ex.userId === uid;
-    }) : [];
 
-    // 预建已有数据索引（同 key 取第一条），避免每条都全表扫描
-    var existingMap = {};
-    existing.forEach(function(ex) {
+    // 预建已有数据索引（同 key 取第一条），当前账单户与其他账单户分开
+    var ownMap = {};
+    var otherMap = {};
+    APP_DATA.bills.forEach(function(ex) {
         var k = _dupKey(ex);
-        if (!existingMap[k]) existingMap[k] = ex;
+        if (uid && ex.userId === uid) {
+            if (!ownMap[k]) ownMap[k] = ex;
+        } else if (!otherMap[k]) {
+            otherMap[k] = ex;
+        }
     });
 
     // 本批次内部去重：同一 key 第二次出现即视为重复（防止同一张截图被重复解析）
@@ -3876,13 +3882,14 @@ function checkDuplicates(bills, userId) {
 
     return bills.map(function(bill) {
         var key = _dupKey(bill);
-        var dup = existingMap[key] || null;
+        var dup = ownMap[key] || null;
+        var crossDup = dup ? null : (otherMap[key] || null);
         var inBatch = null;
-        if (!dup) {
+        if (!dup && !crossDup) {
             if (batchSeen[key]) inBatch = batchSeen[key];
             else batchSeen[key] = bill;
         }
-        var ref = dup || inBatch;
+        var ref = dup || crossDup || inBatch;
         var noteMatch = false;
         if (ref) {
             var n1 = _dupNormText(ref.note);
@@ -3892,17 +3899,106 @@ function checkDuplicates(bills, userId) {
                 noteMatch = true;
             }
         }
+        var matchedUser = null;
+        if (ref && ref.userId) {
+            matchedUser = APP_DATA.billUsers.find(function(u) { return u.id === ref.userId; }) || null;
+        }
         return {
             isDuplicate: !!ref,
             noteMatch: noteMatch,
             inBatch: !!inBatch,
+            crossUser: !!crossDup,     // 重复记录在「其他账单户」里 → 很可能选错了账单户
             matchedId: ref ? ref.id : null,
             matchedNote: ref ? (ref.note || '') : '',
             matchedDate: ref ? (ref.date || '') : '',
             matchedType: ref ? (ref.type || '') : '',
-            matchedAmount: ref ? (ref.amount || 0) : 0
+            matchedAmount: ref ? (ref.amount || 0) : 0,
+            matchedUserId: ref ? (ref.userId || '') : '',
+            matchedUserName: matchedUser ? matchedUser.name : ''
         };
     });
+}
+
+// 账单户名称
+function _billUserName(uid) {
+    if (!uid) return '';
+    var u = APP_DATA.billUsers.find(function(x) { return x.id === uid; });
+    return u ? u.name : '未知账单户';
+}
+
+// 重复标记（备注列里的小标签）
+function _dupBadgeHtml(idx, dr) {
+    if (!dr || !dr.isDuplicate) return '';
+    var crossTip = dr.crossUser
+        ? '；这笔在其他账单户【' + (dr.matchedUserName || '未知') + '】下已存在，可能选错了账单户'
+        : '';
+    var crossMark = dr.crossUser ? '·他户' : '';
+    if (dr.noteMatch) {
+        return ' <span class="dup-icon" title="与已有记录重复（备注匹配）：' + escapeHtml(dr.matchedNote || '无备注') + crossTip + '">⚠️重复' + crossMark + '</span>';
+    }
+    return ' <span class="dup-icon-suspect" title="点击查看对比详情' + crossTip + '" onclick="event.stopPropagation();showDupCompare(' + idx + ');" style="cursor:pointer;">⚠️疑似' + crossMark + '</span>';
+}
+
+// 重复警告栏统一渲染：包含「在其他账单户下已存在」的提示与一键改选账单户入口
+function renderDupWarningBar() {
+    var results = window._dupResults || [];
+    var dupBar = document.getElementById('dupWarningBar');
+    var dupWarnText = document.getElementById('dupWarningText');
+    var removeDupBtn = document.getElementById('removeDupBtn');
+    if (!dupBar) return;
+
+    var dupCount = results.filter(function(d) { return d.isDuplicate; }).length;
+    if (dupCount <= 0) {
+        dupBar.style.display = 'none';
+        return;
+    }
+
+    var exactDupCount = results.filter(function(d) { return d.isDuplicate && d.noteMatch; }).length;
+    var suspectDupCount = dupCount - exactDupCount;
+    var crossResults = results.filter(function(d) { return d.isDuplicate && d.crossUser && d.matchedUserId; });
+
+    var warnParts = [];
+    if (exactDupCount > 0) warnParts.push('确认重复 <strong>' + exactDupCount + '</strong> 条');
+    if (suspectDupCount > 0) warnParts.push('疑似重复 <strong>' + suspectDupCount + '</strong> 条');
+
+    var html = '检测到 <strong id="dupCountBadge">' + dupCount + '</strong> 条与已有数据重复的记录'
+        + (warnParts.length ? '（' + warnParts.join('，') + '）' : '');
+
+    if (crossResults.length) {
+        var byUser = {}, nameMap = {};
+        crossResults.forEach(function(d) {
+            byUser[d.matchedUserId] = (byUser[d.matchedUserId] || 0) + 1;
+            nameMap[d.matchedUserId] = d.matchedUserName || '未知账单户';
+        });
+        var idList = Object.keys(nameMap);
+        var desc = idList.map(function(id) {
+            return '【' + escapeHtml(nameMap[id]) + '】' + byUser[id] + ' 条';
+        }).join('、');
+        html += '<div style="margin-top:4px;font-size:12px;color:#b45309;">'
+            + '其中 <strong>' + crossResults.length + '</strong> 条在其他账单户下已存在：' + desc
+            + '，是不是选错账单户了？</div>';
+        if (idList.length === 1) {
+            html += '<div style="margin-top:6px;"><button onclick="switchImportUser(\'' + idList[0] + '\')" '
+                + 'style="padding:4px 10px;border:1px solid #d97706;background:#fff7ed;color:#b45309;border-radius:6px;font-size:12px;cursor:pointer;">'
+                + '改用【' + escapeHtml(nameMap[idList[0]]) + '】账单户导入</button></div>';
+        }
+    }
+
+    if (dupWarnText) dupWarnText.innerHTML = html;
+    dupBar.style.display = 'flex';
+    if (removeDupBtn) removeDupBtn.style.display = '';
+}
+
+// 预览阶段：一键把导入目标改成「重复记录所在的那个账单户」
+function switchImportUser(uid) {
+    if (!uid || !window._previewBills) return;
+    var sel = document.getElementById('importUser');
+    if (sel) sel.value = uid;
+    window._previewUserId = uid;
+    window._dupOverrides = {};
+    _stopImportUserBlink();
+    recheckDuplicates();
+    showToast('已切换为【' + _billUserName(uid) + '】账单户，请确认重复提示', 'info');
 }
 
 // ==================== 预览与确认导入 ====================
@@ -3940,22 +4036,7 @@ function showPreview(bills, userId) {
     // 显示/隐藏重复警告
     // 注意：写 dupWarnText.innerHTML 会销毁里面的 #dupCountBadge，
     // 所以必须连同 id 一起重建，否则下一次调用 showPreview 时取到 null 而报错中断渲染。
-    var dupBar = document.getElementById('dupWarningBar');
-    var dupWarnText = document.getElementById('dupWarningText');
-    var removeDupBtn = document.getElementById('removeDupBtn');
-    if (dupCount > 0) {
-        var warnParts = [];
-        if (exactDupCount > 0) warnParts.push('确认重复 <strong>' + exactDupCount + '</strong> 条');
-        if (suspectDupCount > 0) warnParts.push('疑似重复 <strong>' + suspectDupCount + '</strong> 条');
-        if (dupWarnText) {
-            dupWarnText.innerHTML = '检测到 <strong id="dupCountBadge">' + dupCount + '</strong> 条与已有数据重复的记录'
-                + (warnParts.length ? '（' + warnParts.join('，') + '）' : '');
-        }
-        if (dupBar) dupBar.style.display = 'flex';
-        if (removeDupBtn) removeDupBtn.style.display = '';
-    } else {
-        if (dupBar) dupBar.style.display = 'none';
-    }
+    renderDupWarningBar();
 
     var tbody = document.getElementById('previewTbody');
     var html = '';
@@ -3969,14 +4050,7 @@ function showPreview(bills, userId) {
         var isDup = dr && dr.isDuplicate;
         var isExactDup = dr && dr.noteMatch; // 备注也匹配 = 确认重复
         var dupClass = isDup ? (isExactDup ? ' dup-row' : ' dup-suspect-row') : '';
-        var dupIcon = '';
-        if (isDup) {
-            if (isExactDup) {
-                dupIcon = ' <span class="dup-icon" title="与已有记录重复（备注匹配）：' + escapeHtml(dr.matchedNote || '无备注') + '">⚠️重复</span>';
-            } else {
-                dupIcon = ' <span class="dup-icon-suspect" title="点击查看对比详情" onclick="event.stopPropagation();showDupCompare(' + idx + ');" style="cursor:pointer;">⚠️疑似</span>';
-            }
-        }
+        var dupIcon = _dupBadgeHtml(idx, dr);
         // 学习修正标识（按字段显示在对应列）
         var learnFields = b._learnFields || [];
         var dateBadge = learnFields.indexOf('日期') !== -1 ? ' <span class="learn-badge" title="学习引擎自动修正：日期">✨</span>' : '';
@@ -4174,30 +4248,12 @@ function recheckDuplicates() {
             allIcons.forEach(function(icon) { icon.remove(); });
             
             if (isDup) {
-                var iconHtml = isExactDup
-                    ? '<span class="dup-icon" title="与已有记录重复（备注匹配）：' + escapeHtml(dr.matchedNote || '无备注') + '">⚠️重复</span>'
-                    : '<span class="dup-icon-suspect" title="点击查看对比详情" onclick="event.stopPropagation();showDupCompare(' + idx + ');" style="cursor:pointer;">⚠️疑似</span>';
-                noteCell.querySelector('input').insertAdjacentHTML('afterend', iconHtml);
+                noteCell.querySelector('input').insertAdjacentHTML('afterend', _dupBadgeHtml(idx, dr));
             }
         }
     });
     
-    var dupBar = document.getElementById('dupWarningBar');
-    var dupWarnText = document.getElementById('dupWarningText');
-    var removeDupBtn = document.getElementById('removeDupBtn');
-    if (dupCount > 0) {
-        var warnParts = [];
-        if (exactDupCount > 0) warnParts.push('确认重复 <strong>' + exactDupCount + '</strong> 条');
-        if (suspectDupCount > 0) warnParts.push('疑似重复 <strong>' + suspectDupCount + '</strong> 条');
-        if (dupWarnText) {
-            dupWarnText.innerHTML = '检测到 <strong id="dupCountBadge">' + dupCount + '</strong> 条与已有数据重复的记录'
-                + (warnParts.length ? '（' + warnParts.join('，') + '）' : '');
-        }
-        if (dupBar) dupBar.style.display = 'flex';
-        if (removeDupBtn) removeDupBtn.style.display = '';
-    } else {
-        if (dupBar) dupBar.style.display = 'none';
-    }
+    renderDupWarningBar();
 }
 
 // 初始化用户手动判定覆盖
@@ -4230,6 +4286,7 @@ function showDupCompare(idx) {
             '<table class="dup-compare-table">' +
                 '<thead><tr><th>字段</th><th class="dup-col-existing">已有记录</th><th class="dup-col-current">当前导入</th></tr></thead>' +
                 '<tbody>' +
+                    '<tr><td>账单户</td><td class="dup-col-existing">' + escapeHtml(dr.matchedUserName || '(未知)') + '</td><td class="dup-col-current">' + escapeHtml(_billUserName(window._previewUserId) || '(未选)') + '</td></tr>' +
                     '<tr><td>日期</td><td class="dup-col-existing">' + escapeHtml(dr.matchedDate) + '</td><td class="dup-col-current">' + escapeHtml(bill.date) + '</td></tr>' +
                     '<tr><td>类型</td><td class="dup-col-existing">' + typeLabel(dr.matchedType) + '</td><td class="dup-col-current">' + typeLabel(bill.type) + '</td></tr>' +
                     '<tr><td>金额</td><td class="dup-col-existing dup-amount">¥' + dr.matchedAmount + '</td><td class="dup-col-current dup-amount">¥' + bill.amount + '</td></tr>' +
@@ -4237,6 +4294,9 @@ function showDupCompare(idx) {
                 '</tbody>' +
             '</table>' +
             '<div class="dup-compare-actions">' +
+                (dr.crossUser && dr.matchedUserId
+                    ? '<button class="dup-compare-btn btn-confirm" onclick="closeDupCompare();switchImportUser(\'' + dr.matchedUserId + '\')">🔁 改用【' + escapeHtml(dr.matchedUserName || '该') + '】账单户导入</button>'
+                    : '') +
                 '<button class="dup-compare-btn btn-confirm" onclick="resolveDupResult(' + idx + ', \'confirm\')">✅ 确认重复</button>' +
                 '<button class="dup-compare-btn btn-dismiss" onclick="resolveDupResult(' + idx + ', \'dismiss\')">❌ 不是重复</button>' +
                 '<button class="dup-compare-btn btn-cancel" onclick="closeDupCompare()">关闭</button>' +
@@ -4312,10 +4372,7 @@ function updateDupRowUI(idx) {
         allIcons.forEach(function(icon) { icon.remove(); });
         
         if (isDup) {
-            var iconHtml = isExactDup
-                ? '<span class="dup-icon" title="已确认为重复（备注匹配）">⚠️重复</span>'
-                : '<span class="dup-icon-suspect" title="点击查看对比详情" onclick="event.stopPropagation();showDupCompare(' + idx + ');" style="cursor:pointer;">⚠️疑似</span>';
-            noteCell.querySelector('input').insertAdjacentHTML('afterend', iconHtml);
+            noteCell.querySelector('input').insertAdjacentHTML('afterend', _dupBadgeHtml(idx, dr));
         }
     }
 }
@@ -4323,27 +4380,7 @@ function updateDupRowUI(idx) {
 // 更新警告栏统计
 function updateDupWarningBar() {
     if (!window._dupResults) return;
-    var dupCount = window._dupResults.filter(function(d) { return d.isDuplicate; }).length;
-    var exactDupCount = window._dupResults.filter(function(d) { return d.isDuplicate && d.noteMatch; }).length;
-    var suspectDupCount = dupCount - exactDupCount;
-    
-    var dupBar = document.getElementById('dupWarningBar');
-    var dupWarnText = document.getElementById('dupWarningText');
-    var removeDupBtn = document.getElementById('removeDupBtn');
-    
-    if (dupCount > 0) {
-        var warnParts = [];
-        if (exactDupCount > 0) warnParts.push('确认重复 <strong>' + exactDupCount + '</strong> 条');
-        if (suspectDupCount > 0) warnParts.push('疑似重复 <strong>' + suspectDupCount + '</strong> 条');
-        if (dupWarnText) {
-            dupWarnText.innerHTML = '检测到 <strong id="dupCountBadge">' + dupCount + '</strong> 条与已有数据重复的记录'
-                + (warnParts.length ? '（' + warnParts.join('，') + '）' : '');
-        }
-        if (dupBar) dupBar.style.display = 'flex';
-        if (removeDupBtn) removeDupBtn.style.display = '';
-    } else {
-        if (dupBar) dupBar.style.display = 'none';
-    }
+    renderDupWarningBar();
 }
 
 function removeDuplicates() {
@@ -4817,11 +4854,13 @@ function confirmImport() {
     var dupCount = dupResults.filter(function(d) { return d.isDuplicate; }).length;
     var existDupCount = dupResults.filter(function(d) { return d.isDuplicate && !d.inBatch; }).length;
     var batchDupCount = dupResults.filter(function(d) { return d.isDuplicate && d.inBatch; }).length;
+    var crossDupCount = dupResults.filter(function(d) { return d.isDuplicate && d.crossUser; }).length;
 
     // 导入前给出明确警告（不能只靠顶部小横条，容易被忽略）
     if (dupCount > 0) {
         var tip = '⚠️ 检测到 ' + dupCount + ' 条重复记录\n\n';
         if (existDupCount > 0) tip += '· 与已有账单重复：' + existDupCount + ' 条\n';
+        if (crossDupCount > 0) tip += '· 其中 ' + crossDupCount + ' 条在「其他账单户」下已存在，可能选错账单户\n';
         if (batchDupCount > 0) tip += '· 本次导入内部重复：' + batchDupCount + ' 条\n';
         tip += '\n点「确定」自动跳过这些重复，只导入其余 ' + (bills.length - dupCount) + ' 条；\n点「取消」返回预览检查（可用「排除重复」或手动删行）。';
         if (!confirm(tip)) return;
@@ -4829,6 +4868,7 @@ function confirmImport() {
 
     var count = 0;
     var skipCount = 0;
+    var importedIds = [];
     bills.forEach(function(b, idx) {
         if (!b.date) b.date = new Date().toISOString().split('T')[0];
         // 跳过重复数据
@@ -4836,7 +4876,7 @@ function confirmImport() {
             skipCount++;
             return;
         }
-        APP_DATA.bills.push({
+        var newBill = {
             id: generateId('bill'),
             userId: userId,
             date: b.date,
@@ -4846,8 +4886,10 @@ function confirmImport() {
             source: '导入',
             createdAt: Date.now(),
             updatedAt: new Date().toISOString()
-        });
-        initBillFieldTimestamps(APP_DATA.bills[APP_DATA.bills.length - 1]);
+        };
+        APP_DATA.bills.push(newBill);
+        initBillFieldTimestamps(newBill);
+        importedIds.push(newBill.id);
         count++;
     });
 
@@ -4857,6 +4899,8 @@ function confirmImport() {
     }
 
     saveData();
+    // 记住这次导入的账单，失败时可在汇总页「更改账单户 / 撤回本次导入」
+    saveLastImportInfo(importedIds, userId);
     closeImportModal();
     
     var msg = '成功导入 ' + count + ' 条记录';
@@ -4865,6 +4909,101 @@ function confirmImport() {
     }
     showToast(msg, 'success');
     renderHomeView();
+}
+
+// ==================== 最近一次导入的补救入口（更改账单户 / 撤回重录） ====================
+var _LAST_IMPORT_KEY = 'billApp_lastImport';
+
+function saveLastImportInfo(ids, userId) {
+    try {
+        localStorage.setItem(_LAST_IMPORT_KEY, JSON.stringify({
+            ids: ids || [], userId: userId || '', at: Date.now()
+        }));
+    } catch (e) {}
+    renderLastImportBar();
+}
+
+// 只保留「还在的」账单，删掉的不再提示
+function getLastImportInfo() {
+    try {
+        var raw = localStorage.getItem(_LAST_IMPORT_KEY);
+        if (!raw) return null;
+        var o = JSON.parse(raw);
+        if (!o || !o.ids || !o.ids.length) return null;
+        var alive = o.ids.filter(function(id) {
+            return APP_DATA.bills.some(function(b) { return b.id === id; });
+        });
+        if (!alive.length) return null;
+        o.ids = alive;
+        return o;
+    } catch (e) { return null; }
+}
+
+function clearLastImportInfo(silent) {
+    try { localStorage.removeItem(_LAST_IMPORT_KEY); } catch (e) {}
+    var bar = document.getElementById('lastImportBar');
+    if (bar) bar.innerHTML = '';
+    if (!silent) showToast('已关闭导入提醒', 'info');
+}
+
+function renderLastImportBar() {
+    var bar = document.getElementById('lastImportBar');
+    if (!bar) return;
+    var info = getLastImportInfo();
+    if (!info) { bar.innerHTML = ''; return; }
+    var opts = APP_DATA.billUsers.map(function(u) {
+        return '<option value="' + u.id + '"' + (u.id === info.userId ? ' selected' : '') + '>' + escapeHtml(u.name) + '</option>';
+    }).join('');
+    bar.innerHTML = '<div class="last-import-bar">' +
+        '<span class="last-import-text">📥 上次导入 <strong>' + info.ids.length + '</strong> 条到【' + escapeHtml(_billUserName(info.userId)) + '】' +
+        '<span class="last-import-hint">选错账单户？在这里直接改</span></span>' +
+        '<select id="lastImportUserSel" class="filter-user-select">' + opts + '</select>' +
+        '<button class="last-import-btn" onclick="applyLastImportUser()">更改账单户</button>' +
+        '<button class="last-import-btn danger" onclick="undoLastImport()">撤回本次导入</button>' +
+        '<button class="last-import-btn ghost" onclick="clearLastImportInfo()" title="关闭提醒">×</button>' +
+        '</div>';
+}
+
+function applyLastImportUser() {
+    var info = getLastImportInfo();
+    if (!info) return;
+    var sel = document.getElementById('lastImportUserSel');
+    var uid = sel ? sel.value : '';
+    if (!uid) { showToast('请先选择账单户', 'error'); return; }
+    if (uid === info.userId) { showToast('账单户没有变化', 'info'); return; }
+    var n = 0;
+    info.ids.forEach(function(id) {
+        var b = APP_DATA.bills.find(function(x) { return x.id === id; });
+        if (!b) return;
+        b.userId = uid;
+        b.updatedAt = new Date().toISOString();
+        n++;
+    });
+    info.userId = uid;
+    try { localStorage.setItem(_LAST_IMPORT_KEY, JSON.stringify(info)); } catch (e) {}
+    saveData();
+    syncPushForce();
+    renderHomeView();
+    showToast('已把上次导入的 ' + n + ' 条账单改为【' + _billUserName(uid) + '】', 'success');
+}
+
+function undoLastImport() {
+    var info = getLastImportInfo();
+    if (!info) return;
+    if (!confirm('确定撤回上次导入的 ' + info.ids.length + ' 条账单吗？\n撤回后这些账单会被删除（并记录墓碑，不会被云同步拉回来）。')) return;
+    var idSet = {};
+    info.ids.forEach(function(id) {
+        if (!APP_DATA.bills.some(function(x) { return x.id === id; })) return;
+        _deletedBills[id] = new Date().toISOString();
+        idSet[id] = 1;
+    });
+    _saveDeletedBills();
+    APP_DATA.bills = APP_DATA.bills.filter(function(b) { return !idSet[b.id]; });
+    saveData();
+    syncPushForce();
+    clearLastImportInfo(true);
+    renderHomeView();
+    showToast('已撤回 ' + Object.keys(idSet).length + ' 条账单', 'success');
 }
 
 // ==================== 拍照功能 ====================
@@ -5966,7 +6105,7 @@ function ocrBrowser(imageDataUrl) {
             showToast('🧠 正在加载本地强模型（首次需下载约30MB模型，请稍候）…', 'info', 6000);
             var _base = _ocrAssetBase();
             var engMod = await import(_base + 'ocr-web/rapidocr-engine.js');
-            var parMod = await import(_base + 'ocr-web/bill-parser.js?v=3');
+            var parMod = await import(_base + 'ocr-web/bill-parser.js?v=4');
             var eng = new engMod.RapidOCREngine();
             await eng.init({
                 detUrl: _base + 'ocr-web/models/PP-OCRv6_det_small.onnx',

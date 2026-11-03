@@ -121,9 +121,36 @@ function looksLikeStruckPrice(s, amt, pending, lastItem, lineIdx) {
   if (lineIdx > lastItem.end + 1) return false;  // 必须紧跟上一笔金额
   const compact = s.replace(/\s+/g, '');
   if (/[¥￥]/.test(compact) || compact.indexOf('元') >= 0) return false; // 带货币符号的是真实金额
+  // 自己带正负号、上一笔却不带 → 自己才是真实交易（上一笔才是原价/被误识别）
+  if (amt[0] && !lastItem.sign) return false;
   const base = lastItem.amount;
   if (!(base > 0)) return false;
   return Math.abs(amt[1] - base) / base <= 0.05;
+}
+
+// 「被划掉的原价」后置清洗：微信卡片里金额下面常跟一行小字原价（带删除线）。
+// OCR 拿不到删除线，只能靠结构判断：没有备注、且紧挨着一笔金额几乎相同的账单。
+// 用后置统一清洗（而不是只在解析时判断相邻行），是为了兼容原价行被识别成
+// "-1520.00"、被拆成多行、或中间夹了噪声行等变体。
+function isStruckPriceItem(it, all) {
+  if (!it) return false;
+  if (cleanNote(it.desc.join(' '))) return false;          // 有备注 = 正常交易
+  const raw = (it.raw || '').replace(/\s+/g, '');
+  if (/[¥￥]/.test(raw) || raw.indexOf('元') >= 0) return false;  // 带货币符号按真实金额处理
+  if (/[\u4e00-\u9fff]/.test(raw)) return false;           // 带中文说明的不是原价行
+  const base = Math.abs(it.amount);
+  if (!(base > 0)) return false;
+  for (const o of all) {
+    if (o === it) continue;
+    if (Math.abs(o.start - it.start) > 3) continue;        // 必须挨得很近（同一张卡片）
+    if (!cleanNote(o.desc.join(' '))) continue;            // 参照物必须有备注
+    // 自己带正负号、参照物却不带 → 自己才是真实交易，别被无符号的原价顶掉
+    if (it.sign && !o.sign) continue;
+    const b2 = Math.abs(o.amount);
+    if (!(b2 > 0)) continue;
+    if (Math.abs(base - b2) / b2 <= 0.03) return true;     // 金额几乎相同（差 ≤3%）
+  }
+  return false;
 }
 
 function decideType(sign, desc, forced) {
@@ -190,7 +217,7 @@ export function parseBills(text, defaultDate) {
         const tail = findAmountTail(rest);
         if (tail && !/(退款|余额|合计)/.test(rest)) {
           const [sign, val, desc] = tail;
-          items.push({ desc: [desc], sign, amount: val, start: i, end: i, date: dinfo });
+          items.push({ desc: [desc], sign, amount: val, start: i, end: i, date: dinfo, raw: s });
           lastItem = items[items.length - 1];
           pending = [];
           continue;
@@ -206,7 +233,7 @@ export function parseBills(text, defaultDate) {
     if (amt) {
       // 被划掉的原价不是一笔交易，直接丢弃，否则会多出记录并挤乱后面的日期配对
       if (looksLikeStruckPrice(s, amt, pending, lastItem, i)) continue;
-      items.push({ desc: pending.slice(), sign: amt[0], amount: amt[1], start: i, end: i, type: forced });
+      items.push({ desc: pending.slice(), sign: amt[0], amount: amt[1], start: i, end: i, type: forced, raw: s });
       lastItem = items[items.length - 1];
       pending = [];
       forced = null;
@@ -221,6 +248,12 @@ export function parseBills(text, defaultDate) {
     if (isJunk(s)) continue;
 
     pending.push(s);
+  }
+
+  // 剔除被划掉的原价（必须在日期配对之前，否则会挤乱日期归属）
+  const struck = items.map((it) => isStruckPriceItem(it, items));
+  for (let k = items.length - 1; k >= 0; k--) {
+    if (struck[k]) items.splice(k, 1);
   }
 
   // 第二遍：日期与交易配对。
