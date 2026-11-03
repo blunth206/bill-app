@@ -1328,6 +1328,11 @@ function renderHomeView() {
     var dateFrom = range.from;
     var dateTo = range.to;
 
+    // 类型筛选（收入/支出/结余）：只作用于下方列表，不改变上方"全年汇总"卡片口径
+    var filterType = 'all';
+    var typeFilterEl = document.getElementById('homeTypeFilter');
+    if (typeFilterEl) filterType = typeFilterEl.value || 'all';
+
     // 筛选账单
     var filtered = APP_DATA.bills.filter(function(b) {
         if (filterUser !== 'all' && b.userId !== filterUser) return false;
@@ -1335,6 +1340,12 @@ function renderHomeView() {
         if (dateTo && b.date > dateTo) return false;
         return true;
     });
+
+    // 汇总口径：账单户 + 时间（不受类型筛选影响，保证收入/支出/结余三项都成立）
+    var sumBills = filtered.slice();
+    if (filterType !== 'all') {
+        filtered = filtered.filter(function(b) { return b.type === filterType; });
+    }
 
     // 排序：按日期降序
     filtered.sort(function(a, b) { return b.date.localeCompare(a.date) || b.createdAt - a.createdAt; });
@@ -1356,8 +1367,8 @@ function renderHomeView() {
     var yearSum = calcTotals(yearBills);
     var yearIncome = yearSum.income, yearExpense = yearSum.expense, yearTotalBalance = yearSum.balance;
 
-    // 当前视图筛选汇总（受账单户+时间模式双重影响）
-    var viewSum = calcTotals(filtered);
+    // 当前视图筛选汇总（受账单户+时间模式双重影响，不含类型筛选）
+    var viewSum = calcTotals(sumBills);
     var totalIncome = viewSum.income, totalExpense = viewSum.expense, balance = viewSum.balance;
 
     // 判断是否有时间筛选（按月/按年/按日/自定义造成数据范围缩小）
@@ -1368,6 +1379,12 @@ function renderHomeView() {
     if (hasTimeFilter && (yearTotalBalance !== balance || yearIncome !== totalIncome || yearExpense !== totalExpense)) {
         filterSubText = '<div style="margin-top:8px;text-align:center;font-size:12px;color:#888;white-space:nowrap;">' +
             '筛选结果：收入 ¥' + formatMoney(totalIncome) + ' · 支出 ¥' + formatMoney(totalExpense) + ' · 结余 ¥' + formatMoney(balance) +
+        '</div>';
+    }
+    // 类型筛选生效时给出明确提示（避免误以为数据丢了）
+    if (filterType !== 'all') {
+        filterSubText += '<div style="margin-top:6px;text-align:center;font-size:12px;color:#888;white-space:nowrap;">' +
+            '列表已筛选：仅显示「' + filterType + '」，共 ' + filtered.length + ' 条' +
         '</div>';
     }
 
@@ -1711,6 +1728,8 @@ function populateTimeSelects() {
 
 function resetHomeFilter() {
     document.getElementById('homeUserFilter').value = 'all';
+    var typeSel = document.getElementById('homeTypeFilter');
+    if (typeSel) typeSel.value = 'all';
     document.getElementById('homeDateFrom').value = '';
     document.getElementById('homeDateTo').value = '';
     var now = new Date();
@@ -5911,7 +5930,7 @@ function ocrBrowser(imageDataUrl) {
             showToast('🧠 正在加载本地强模型（首次需下载约30MB模型，请稍候）…', 'info', 6000);
             var _base = _ocrAssetBase();
             var engMod = await import(_base + 'ocr-web/rapidocr-engine.js');
-            var parMod = await import(_base + 'ocr-web/bill-parser.js');
+            var parMod = await import(_base + 'ocr-web/bill-parser.js?v=2');
             var eng = new engMod.RapidOCREngine();
             await eng.init({
                 detUrl: _base + 'ocr-web/models/PP-OCRv6_det_small.onnx',

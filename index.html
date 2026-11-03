@@ -68,7 +68,7 @@
                     location.reload();
                 });
             }
-            navigator.serviceWorker.register('sw.js?v=51').catch(function() {});
+            navigator.serviceWorker.register('sw.js?v=52').catch(function() {});
         })();
         (function removeSafetyBanner() {
             const observer = new MutationObserver(function() {
@@ -177,6 +177,12 @@
                         <span class="filter-account-label">账单户</span>
                         <select id="homeUserFilter" class="filter-user-select" onchange="onFilterChange()">
                             <option value="all">全部账单户</option>
+                        </select>
+                        <select id="homeTypeFilter" class="filter-user-select" onchange="onFilterChange()">
+                            <option value="all">收入/支出</option>
+                            <option value="收入">仅收入</option>
+                            <option value="支出">仅支出</option>
+                            <option value="结余">仅结余</option>
                         </select>
                         <div class="time-mode-btns">
                             <button class="time-mode-btn active" data-mode="month" onclick="setTimeMode('month')">按月</button>
@@ -1056,7 +1062,7 @@ async function handleRequest(request) {
     <!-- Toast 提示 -->
     <div class="toast" id="toast"></div>
 
-    <script src="app.js?v=55"></script>
+    <script src="app.js?v=56"></script>
     <script>
     (function(){
         function showForgot(){

@@ -10,7 +10,11 @@ const RE_JUNK = /^[\sA-Za-z0-9:：/\\\-_.+*#]{1,6}$/;
 
 const NOISE_PATTERNS = [
   /^[\d:：\s]+$/,
-  /^(账单|全部账单|收支统计|收支明细|账单详情|账单服务|交易记录|交易明细|查找交易|搜索|筛选|更多|全部)[>＞\s]*$/,
+  /^(账单|全部账单|收支统计|收支明细|账单详情|账单服务|交易记录|交易明细|查找交易|搜索|筛选|更多|全部)[>＞»）)】\]\s]*$/,
+  // ---- 手机截图顶部状态栏：运营商 + 时间 / 网络标识 / 电量 ----
+  /^(?:中国电信|中国移动|中国联通|中国广电)\s*\d{1,2}\s*[:：]\s*\d{2}$/,
+  /^(?:5G|4G|3G|5G\+|HD|VoLTE|Wi-?Fi|WLAN)\s*$/,
+  /^\d{1,3}\s*%\s*$/,
   /^[A-Za-z]?\s*(查找交易|收支统计|全部账单)[>＞]*$/,
   /^(微信支付|支付宝|微信|收款|付款|财付通)$/,
   /^(支出|收入)\s*[¥￥]?\s*[\d,]+\.\d{1,2}\s*(收入|支出)?\s*[¥￥]?\s*[\d,]*\.?\d*$/,
@@ -38,6 +42,17 @@ function isNoise(s) {
 
 function isJunk(s) {
   return RE_JUNK.test(s);
+}
+
+// 截图顶部状态栏残片（如「中国电信 9:51」「9:51」），需要从备注中剔除，
+// 但保留「中国电信话费充值」这类正常备注：只有运营商紧跟时间/孤立时间才算状态栏。
+const RE_STATUS_CARRIER_TIME = /(?:中国电信|中国移动|中国联通|中国广电)\s*\d{1,2}\s*[:：]\s*\d{2}/g;
+const RE_STATUS_TIME = /(?:^|\s)\d{1,2}\s*[:：]\s*\d{2}(?:\s*[:：]\s*\d{2})?(?=\s|$)/g;
+
+function scrubStatusBar(s) {
+  s = s.replace(RE_STATUS_CARRIER_TIME, ' ');
+  s = s.replace(RE_STATUS_TIME, ' ');
+  return s;
 }
 
 function matchDatePrefix(s) {
@@ -82,11 +97,14 @@ function findAmountTail(s) {
 
 function cleanNote(s) {
   s = norm(s);
+  s = scrubStatusBar(s);
   s = s.replace(/^(?:[A-Za-z0-9]{1,6}[\s.、]+)+/, '');
   s = s.replace(/^[·•\-—\s|]+/, '');
-  s = s.replace(/[.。·…\s\-|]+$/, '');
+  s = s.replace(/[.。·…\s\-|>＞»）)】\]]+$/, '');
   s = s.replace(/(?<=[\u4e00-\u9fff])\s+(?=[\u4e00-\u9fff])/g, '');
   s = s.replace(/\s{2,}/g, ' ').trim();
+  // 清完之后如果只剩界面文字（如「收支统计」）或零碎片段，就不要当备注了
+  if (!s || isNoise(s) || isJunk(s)) return '';
   return s.slice(0, 80);
 }
 
