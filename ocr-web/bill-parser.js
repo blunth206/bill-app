@@ -56,17 +56,21 @@ function scrubStatusBar(s) {
 }
 
 function matchDatePrefix(s) {
-  const compact = s.replace(/\s+/g, '');
-  for (const rx of [RE_DATE_CN, RE_DATE_FULL]) {
-    const m = rx.exec(compact);
-    if (!m) continue;
-    const g = m.slice(1).map((x) => (x == null ? null : x));
-    const month = parseInt(g[1], 10), day = parseInt(g[2], 10);
-    if (!(month >= 1 && month <= 12 && day >= 1 && day <= 31)) continue;
-    let rest = compact.slice(m[0].length);
-    const tm = RE_TIME.exec(rest);
-    if (tm) rest = rest.slice(tm[0].length);
-    return [{ year: g[0] ? parseInt(g[0], 10) : null, month, day }, rest];
+  // 先按原文匹配，再按“去掉空格”的写法兜底：
+  // 原文优先是为了让「2026-11-01 10:11」这种带时间的日期能匹配上，
+  // 去掉空格后日和时会粘成「...0110:11」，被日期的边界判断挡住。
+  for (const src of [s, s.replace(/\s+/g, '')]) {
+    for (const rx of [RE_DATE_CN, RE_DATE_FULL]) {
+      const m = rx.exec(src);
+      if (!m) continue;
+      const g = m.slice(1).map((x) => (x == null ? null : x));
+      const month = parseInt(g[1], 10), day = parseInt(g[2], 10);
+      if (!(month >= 1 && month <= 12 && day >= 1 && day <= 31)) continue;
+      let rest = src.slice(m[0].length);
+      const tm = RE_TIME.exec(rest);
+      if (tm) rest = rest.slice(tm[0].length);
+      return [{ year: g[0] ? parseInt(g[0], 10) : null, month, day }, rest];
+    }
   }
   return [null, s];
 }
@@ -106,6 +110,20 @@ function cleanNote(s) {
   // 清完之后如果只剩界面文字（如「收支统计」）或零碎片段，就不要当备注了
   if (!s || isNoise(s) || isJunk(s)) return '';
   return s.slice(0, 80);
+}
+
+// 微信账单卡片里「金额」下面常跟一行被划掉的原价（如 +1518.63 下面的 1520.00）。
+// OCR 拿不到删除线信息，只能靠结构判断：没有货币符号、与上一笔金额几乎相同、
+// 且两者之间没有任何描述文字（说明它和上一笔属于同一张卡片）。
+function looksLikeStruckPrice(s, amt, pending, lastItem, lineIdx) {
+  if (!amt || !lastItem) return false;
+  if (pending.length) return false;              // 中间夹了描述文字 → 是新的一笔
+  if (lineIdx > lastItem.end + 1) return false;  // 必须紧跟上一笔金额
+  const compact = s.replace(/\s+/g, '');
+  if (/[¥￥]/.test(compact) || compact.indexOf('元') >= 0) return false; // 带货币符号的是真实金额
+  const base = lastItem.amount;
+  if (!(base > 0)) return false;
+  return Math.abs(amt[1] - base) / base <= 0.05;
 }
 
 function decideType(sign, desc, forced) {
@@ -158,6 +176,7 @@ export function parseBills(text, defaultDate) {
   const dates = [];
   let pending = [];
   let forced = null;
+  let lastItem = null;
 
   for (let i = 0; i < lines.length; i++) {
     const s = lines[i];
@@ -172,19 +191,23 @@ export function parseBills(text, defaultDate) {
         if (tail && !/(退款|余额|合计)/.test(rest)) {
           const [sign, val, desc] = tail;
           items.push({ desc: [desc], sign, amount: val, start: i, end: i, date: dinfo });
+          lastItem = items[items.length - 1];
           pending = [];
           continue;
         }
         if (/(退款|余额|合计)/.test(rest)) continue;
         pending.push(rest);
       }
-      dates.push({ idx: i, info: dinfo });
+      dates.push({ idx: i, info: dinfo, hasTime: RE_TIME.test(s) });
       continue;
     }
 
     const amt = parseAmount(s);
     if (amt) {
+      // 被划掉的原价不是一笔交易，直接丢弃，否则会多出记录并挤乱后面的日期配对
+      if (looksLikeStruckPrice(s, amt, pending, lastItem, i)) continue;
       items.push({ desc: pending.slice(), sign: amt[0], amount: amt[1], start: i, end: i, type: forced });
+      lastItem = items[items.length - 1];
       pending = [];
       forced = null;
       continue;
@@ -200,27 +223,64 @@ export function parseBills(text, defaultDate) {
     pending.push(s);
   }
 
-  // 第二遍：日期与交易配对（第 k 个日期配第 k 笔，兼容日期在金额前/后）
+  // 第二遍：日期与交易配对。
+  // 用「距离最近优先」的一对一匹配，替代原先的固定偏移整段对齐：
+  // 只要 OCR 多识别/漏识别一行，固定偏移就会把后面所有账单的日期整体错位，
+  // 导致首尾几笔拿不到日期而退回「今天」。
   function dist(item, d) {
     const lo = item.start - 1, hi = item.end + 1;
-    if (lo <= d.idx && d.idx <= hi) return 0;
-    return Math.min(Math.abs(d.idx - item.start), Math.abs(d.idx - item.end));
+    let base;
+    if (lo <= d.idx && d.idx <= hi) base = 0;
+    else base = Math.min(Math.abs(d.idx - item.start), Math.abs(d.idx - item.end));
+    // 「2026年10月31日」这种只有日期没有时间的是分组标题，属于它后面的账单，
+    // 不能配给标题上方的那一笔（否则上一组最后一笔会被错标成下一天）。
+    if (!d.hasTime && item.start < d.idx) base += 7;
+    return base;
   }
   if (items.length && dates.length) {
-    let best = null;
-    for (let off = -3; off <= 3; off++) {
-      const pairs = [];
-      for (let k = 0; k < dates.length; k++) {
-        const j = k + off;
-        if (j >= 0 && j < items.length) pairs.push([j, k]);
-      }
-      if (!pairs.length) continue;
-      let score = 0;
-      for (const [j, k] of pairs) score += dist(items[j], dates[k]);
-      score += 3 * (items.length - pairs.length) + 3 * (dates.length - pairs.length);
-      if (best === null || score < best[0]) best = [score, pairs];
+    const n = items.length, m = dates.length;
+    const GAP_ITEM = 3, GAP_DATE = 3;   // 允许中途“跳过”多识别/漏识别的行
+    const dp = [], back = [];
+    for (let i = 0; i <= n; i++) {
+      dp.push(new Array(m + 1).fill(0));
+      back.push(new Array(m + 1).fill(0));
     }
-    if (best) for (const [j, k] of best[1]) items[j].date = dates[k].info;
+    for (let i = 1; i <= n; i++) { dp[i][0] = dp[i - 1][0] + GAP_ITEM; back[i][0] = 1; }
+    for (let k = 1; k <= m; k++) { dp[0][k] = dp[0][k - 1] + GAP_DATE; back[0][k] = 2; }
+    for (let i = 1; i <= n; i++) {
+      for (let k = 1; k <= m; k++) {
+        const match = dp[i - 1][k - 1] + dist(items[i - 1], dates[k - 1]);
+        const skipItem = dp[i - 1][k] + GAP_ITEM;
+        const skipDate = dp[i][k - 1] + GAP_DATE;
+        let best = match, act = 0;
+        if (skipItem < best) { best = skipItem; act = 1; }
+        if (skipDate < best) { best = skipDate; act = 2; }
+        dp[i][k] = best; back[i][k] = act;
+      }
+    }
+    // 回溯：0=配对，1=这笔没有日期，2=这个日期是多出来的（如分组标题）
+    let i = n, k = m;
+    while (i > 0 && k > 0) {
+      const act = back[i][k];
+      if (act === 0) { items[i - 1].date = dates[k - 1].info; i--; k--; }
+      else if (act === 1) { i--; }
+      else { k--; }
+    }
+  }
+
+  // 仍没配到日期的账单：账单列表按时间连续排列，沿用最近一笔已识别的日期，
+  // 比直接退回「今天」更接近真实（截图被裁切、OCR 漏行时很常见）。
+  if (items.some((it) => it.date)) {
+    const known = items.filter((it) => it.date);
+    for (const it of items) {
+      if (it.date) continue;
+      let best = null, bestD = Infinity;
+      for (const k of known) {
+        const d2 = Math.abs(k.start - it.start);
+        if (d2 < bestD) { bestD = d2; best = k; }
+      }
+      if (best) it.date = best.date;
+    }
   }
 
   const hasTxTime = lines.some((s) => /(转账时间|支付时间|交易时间)/.test(s));
