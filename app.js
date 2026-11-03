@@ -1476,12 +1476,12 @@ function renderHomeView() {
                 '<td class="' + amountClass + '">¥' + formatMoney(b.amount) + '</td>' +
                 '<td class="note-cell" title="' + (b.note || '') + '" onclick="openDetailModal(\'' + b.id + '\')">' + (b.note || '-') + '</td>' +
                 '<td><span class="source-badge ' + sourceClass + '">' + (b.source || '手动') + '</span></td>' +
-                '<td class="created-cell" style="white-space:nowrap;color:var(--text-secondary);font-size:12px;">' + formatDateTime(b.createdAt) + '</td>' +
                 '<td><div class="action-btns">' +
                     '<button class="btn-view" onclick="openDetailModal(\'' + b.id + '\')">查看</button>' +
                     '<button class="btn-edit" onclick="openEditBillModal(\'' + b.id + '\')">编辑</button>' +
                     '<button class="btn-delete" onclick="deleteBill(\'' + b.id + '\')">删除</button>' +
                 '</div></td>' +
+                '<td class="created-cell">' + formatDateTime(b.createdAt) + '</td>' +
                 '</tr>';
         });
         tbody.innerHTML = html;
@@ -1586,7 +1586,8 @@ var COLUMN_DEFAULTS = {
     amount: 100,
     note: 200,
     source: 80,
-    action: 130
+    action: 130,
+    created: 132
 };
 
 function getColWidthsKey() {
