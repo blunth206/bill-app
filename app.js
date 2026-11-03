@@ -1315,6 +1315,7 @@ function getFilterDateRange() {
 }
 
 function renderHomeView() {
+    ensureHomeTableHeader();
     initColumnResize();
     var searchKw = '';
     var filterUser = document.getElementById('homeUserFilter').value;
@@ -1589,6 +1590,53 @@ var COLUMN_DEFAULTS = {
     action: 130,
     created: 132
 };
+
+// 汇总页表头的唯一来源（顺序+文案）：防止浏览器缓存了旧 index.html 时表头与内容列错位
+var HOME_TABLE_COLUMNS = [
+    { key: 'check',   label: '',       cls: 'col-check', hidden: true, checkAll: true },
+    { key: 'date',    label: '日期' },
+    { key: 'user',    label: '账单户' },
+    { key: 'type',    label: '类型' },
+    { key: 'amount',  label: '金额' },
+    { key: 'note',    label: '备注' },
+    { key: 'source',  label: '来源' },
+    { key: 'action',  label: '操作',   cls: 'col-action' },
+    { key: 'created', label: '导入日期' }
+];
+
+function ensureHomeTableHeader() {
+    var table = document.getElementById('homeBillTable');
+    if (!table) return;
+    var row = table.querySelector('thead tr');
+    if (!row) return;
+
+    var cur = Array.prototype.map.call(row.children, function(th) {
+        return (th.getAttribute('data-col') || '') + '|' + th.textContent.trim();
+    });
+    var want = HOME_TABLE_COLUMNS.map(function(c) { return c.key + '|' + (c.label || ''); });
+    var same = cur.length === want.length && cur.every(function(v, i) { return v === want[i]; });
+    if (same) return;
+
+    var html = '';
+    HOME_TABLE_COLUMNS.forEach(function(c) {
+        var attrs = ' data-col="' + c.key + '"';
+        if (c.checkAll) attrs += ' id="colCheckTh"';
+        if (c.cls) attrs += ' class="' + c.cls + '"';
+        if (c.hidden) attrs += ' style="display:none;"';
+        html += '<th' + attrs + '>' +
+            (c.checkAll
+                ? '<input type="checkbox" id="selectAllCheckbox" onchange="toggleSelectAll(this)">'
+                : c.label) +
+            '</th>';
+    });
+    row.innerHTML = html;
+
+    // 表头重建后列宽需按新表头重新生成
+    var colgroup = table.querySelector('colgroup.col-resize-group');
+    if (colgroup) colgroup.innerHTML = '';
+    _colResizeInitialized = false;
+    initColumnResize();
+}
 
 function getColWidthsKey() {
     var accId = APP_DATA.currentAccountId || 'default';
@@ -7646,7 +7694,9 @@ function init() {
 // 页面加载完成后初始化
 document.addEventListener('DOMContentLoaded', function() {
     // 输出版本号，方便确认是否加载到最新代码
-    console.log('[记账App] 版本 v49 | ' + new Date().toISOString());
+    console.log('[记账App] 版本 v50 | ' + new Date().toISOString());
+    // 先把表头按当前列的真相纠正（旧缓存的 index.html 表头会缺列/顺序错）
+    ensureHomeTableHeader();
     // 拼接固定显示的 GitHub Token
     (function(){
         var p1 = document.getElementById('tkPt1');
