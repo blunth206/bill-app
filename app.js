@@ -6647,7 +6647,7 @@ function ocrBrowser(imageDataUrl) {
             showToast('🧠 正在加载本地强模型（首次需下载约30MB模型，请稍候）…', 'info', 6000);
             var _base = _ocrAssetBase();
             var engMod = await import(_base + 'ocr-web/rapidocr-engine.js');
-            var parMod = await import(_base + 'ocr-web/bill-parser.js?v=4');
+            var parMod = await import(_base + 'ocr-web/bill-parser.js?v=5');
             var eng = new engMod.RapidOCREngine();
             await eng.init({
                 detUrl: _base + 'ocr-web/models/PP-OCRv6_det_small.onnx',

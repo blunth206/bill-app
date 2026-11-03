@@ -23,6 +23,9 @@ const NOISE_PATTERNS = [
   /^(当前状态|交易单号|商户单号|订单号|转账单号|转账说明|转账时间|创建时间|支付时间|支付方式|付款方式|收款方式|账单分类|收款方备注|付款方留言|收款方服务|收款方名片|转账记录|退款记录)$/,
   /^(本服务由财付通提供|定位到聊天位置|查看往来转账|对订单有疑惑|发起群收款|申请电子凭证|内容由AI生成|仅供参考)/,
   /^已退款\s*[¥￥]?[\d,]+\.?\d*/,
+  // 分组标题（如「2026年10月」「2026年10月1日」）不属于任何一笔的备注
+  /^\d{4}\s*年\s*(?:\d{1,2}\s*月)?\s*$/,
+  /^\d{1,2}\s*月\s*\d{4}\s*年\s*$/,
 ];
 
 const INCOME_HINTS = ['收款', '收到', '转入', '退款', '红包', '入账', '工资', '利息',
@@ -68,7 +71,10 @@ function matchDatePrefix(s) {
       if (!(month >= 1 && month <= 12 && day >= 1 && day <= 31)) continue;
       let rest = src.slice(m[0].length);
       const tm = RE_TIME.exec(rest);
-      if (tm) rest = rest.slice(tm[0].length);
+      // 必须按匹配到的位置切，不能直接 slice(长度)：日期和“时:分”之间通常有空格，
+      // 直接切会把时间末尾的字符残留下来（如 “10月17日 17:02” 残留一个 “2”），
+      // 这个残片会跟着被拼进备注。
+      if (tm) rest = rest.slice(tm.index + tm[0].length);
       return [{ year: g[0] ? parseInt(g[0], 10) : null, month, day }, rest];
     }
   }
@@ -122,6 +128,18 @@ function looksLikeStruckPrice(s, amt, pending, lastItem, lineIdx) {
   const compact = s.replace(/\s+/g, '');
   if (/[¥￥]/.test(compact) || compact.indexOf('元') >= 0) return false; // 带货币符号的是真实金额
   // 自己带正负号、上一笔却不带 → 自己才是真实交易（上一笔才是原价/被误识别）
+  if (amt[0] && !lastItem.sign) return false;
+  const base = lastItem.amount;
+  if (!(base > 0)) return false;
+  return Math.abs(amt[1] - base) / base <= 0.05;
+}
+
+// 「被划掉的原价」判定（不要求紧邻）：用于在「补回标题」之前先排除原价行，
+// 否则一旦给它补上标题，isStruckPriceItem 就会认为它是正常交易而保留下来。
+function looksLikeStruckPriceFar(s, amt, lastItem) {
+  if (!amt || !lastItem) return false;
+  const compact = s.replace(/\s+/g, '');
+  if (/[¥￥]/.test(compact) || compact.indexOf('元') >= 0) return false;
   if (amt[0] && !lastItem.sign) return false;
   const base = lastItem.amount;
   if (!(base > 0)) return false;
@@ -204,6 +222,11 @@ export function parseBills(text, defaultDate) {
   let pending = [];
   let forced = null;
   let lastItem = null;
+  // 上一条「日期行」以及它之前累积的文字（卡片标题）。
+  // OCR 的阅读顺序按检测框坐标排序，同一张卡片里「标题 / 日期 / 金额」三块的先后并不固定：
+  // 有时是 标题→金额→日期，有时是 标题→日期→金额（日期行会清空 pending，导致备注丢失）。
+  // 这里把日期行之前的文字存一份，金额紧跟在日期行后面时再接回来。
+  let lastDate = null;
 
   for (let i = 0; i < lines.length; i++) {
     const s = lines[i];
@@ -212,6 +235,7 @@ export function parseBills(text, defaultDate) {
 
     const [dinfo, rest] = matchDatePrefix(s);
     if (dinfo) {
+      const carry = pending.slice();
       pending = [];
       if (rest) {
         const tail = findAmountTail(rest);
@@ -220,12 +244,14 @@ export function parseBills(text, defaultDate) {
           items.push({ desc: [desc], sign, amount: val, start: i, end: i, date: dinfo, raw: s });
           lastItem = items[items.length - 1];
           pending = [];
+          lastDate = null;
           continue;
         }
         if (/(退款|余额|合计)/.test(rest)) continue;
-        pending.push(rest);
+        if (!isJunk(rest) && !isNoise(rest)) pending.push(rest);
       }
       dates.push({ idx: i, info: dinfo, hasTime: RE_TIME.test(s) });
+      lastDate = { idx: i, carry: carry };
       continue;
     }
 
@@ -233,10 +259,18 @@ export function parseBills(text, defaultDate) {
     if (amt) {
       // 被划掉的原价不是一笔交易，直接丢弃，否则会多出记录并挤乱后面的日期配对
       if (looksLikeStruckPrice(s, amt, pending, lastItem, i)) continue;
-      items.push({ desc: pending.slice(), sign: amt[0], amount: amt[1], start: i, end: i, type: forced, raw: s });
+      let desc = pending.slice();
+      // 金额行紧跟在日期行后面：把日期行之前的标题文字接回来（否则这条备注会是空的）
+      if (lastDate && lastDate.idx === i - 1 && lastDate.carry.length) {
+        // 但若这一行更像「划掉的原价」（与上一笔金额几乎相同、无货币符号），
+        // 就不要给它补标题，否则它会被当成一笔真实交易
+        if (!looksLikeStruckPriceFar(s, amt, lastItem)) desc = lastDate.carry.concat(desc);
+      }
+      items.push({ desc: desc, sign: amt[0], amount: amt[1], start: i, end: i, type: forced, raw: s });
       lastItem = items[items.length - 1];
       pending = [];
       forced = null;
+      lastDate = null;
       continue;
     }
 
@@ -248,6 +282,32 @@ export function parseBills(text, defaultDate) {
     if (isJunk(s)) continue;
 
     pending.push(s);
+  }
+
+  // 备注兜底：OCR 有时把「金额框」排在「标题文字」之前（版面分析按坐标排序，
+  // 金额那块往往略微偏上），金额行被消费时 pending 还是空的 → 备注空白。
+  // 这里在金额行的前后、同一张卡片范围内找回那一行中文描述。
+  // 注意：必须在「剔除划掉的原价」之前做——否则原价的参照物（上一笔）还没有备注，
+  // 原价行会被当成正常交易留下来。疑似原价的行在这里先跳过（不补备注），
+  // 交给后面的清洗剔除。
+  for (let k = 0; k < items.length; k++) {
+    const it = items[k];
+    if (cleanNote(it.desc.join(' '))) continue;
+    // 疑似「划掉的原价」不补备注，留给后置清洗剔除
+    if (looksLikeStruckPriceFar(it.raw || '', [it.sign, it.amount], items[k - 1])) continue;
+    const prevEnd = k > 0 ? items[k - 1].end : -1;
+    const nextStart = k + 1 < items.length ? items[k + 1].start : lines.length;
+    const near = [];
+    for (let j = it.end + 1; j < nextStart; j++) near.push(lines[j]);
+    for (let j = it.start - 1; j > prevEnd; j--) near.push(lines[j]);
+    for (const c of near) {
+      if (!c || !/[\u4e00-\u9fff]/.test(c)) continue;
+      if (parseAmount(c)) continue;              // 另一笔金额，不是备注
+      if (matchDatePrefix(c)[0]) continue;       // 日期行
+      if (isNoise(c) || isJunk(c)) continue;
+      const n = cleanNote(c);
+      if (n) { it.desc = [n]; break; }
+    }
   }
 
   // 剔除被划掉的原价（必须在日期配对之前，否则会挤乱日期归属）
