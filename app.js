@@ -3405,11 +3405,44 @@ function processFile(file) {
 }
 
 // ==================== 多图批量识别 ====================
-function enableBatchMode() {
-    window._ocrBatchActive = true;
-    if (!window._ocrBatchQueue) window._ocrBatchQueue = [];
+var BATCH_MODE_KEY = 'billBatchModeOn';
+
+// 兼容旧入口（拖拽多文件等）：直接打开开关
+function enableBatchMode() { toggleBatchMode(true); }
+
+// 开关主逻辑：force=true 强制开，false 强制关，不传则切换
+function toggleBatchMode(force) {
+    var on = (typeof force === 'boolean') ? force : !window._ocrBatchActive;
+    window._ocrBatchActive = on;
+    if (on && !window._ocrBatchQueue) window._ocrBatchQueue = [];
+    try { localStorage.setItem(BATCH_MODE_KEY, on ? '1' : '0'); } catch (e) {}
+    syncBatchSwitch(on);
     renderBatchStrip();
-    showToast('已开启多图模式：可继续添加图片，准备好后点「开始批量识别」', 'info');
+    if (on) {
+        showToast('多图识别已开启：可一次选择/拍摄多张截图，识别完逐张核对', 'success');
+    } else if ((window._ocrBatchQueue || []).length) {
+        showToast('多图识别已关闭，队列仍保留（重新打开可继续）', 'info');
+    }
+}
+
+// 同步开关外观（开=蓝色+文字在左，关=灰色+文字在右）
+function syncBatchSwitch(on) {
+    var sw = document.getElementById('batchSwitch');
+    var txt = document.getElementById('batchSwitchText');
+    if (!sw) return;
+    if (on) { sw.classList.add('on'); } else { sw.classList.remove('on'); }
+    sw.setAttribute('aria-checked', on ? 'true' : 'false');
+    if (txt) txt.textContent = on ? '开' : '关';
+}
+
+// 页面初始化时恢复上次的开关状态
+function restoreBatchSwitch() {
+    var on = false;
+    try { on = localStorage.getItem(BATCH_MODE_KEY) === '1'; } catch (e) {}
+    window._ocrBatchActive = on;
+    if (on && !window._ocrBatchQueue) window._ocrBatchQueue = [];
+    syncBatchSwitch(on);
+    renderBatchStrip();
 }
 
 // 把文件加入批量队列（图片进队列，CSV/Excel 等非图片逐张走原逻辑）
@@ -3443,7 +3476,6 @@ function removeBatchImage(idx) {
 
 function clearBatchQueue() {
     window._ocrBatchQueue = [];
-    window._ocrBatchActive = false;
     renderBatchStrip();
 }
 
@@ -3456,7 +3488,7 @@ function renderBatchStrip() {
     if (cnt) cnt.textContent = q.length;
     if (cnt2) cnt2.textContent = q.length;
     if (!sec) return;
-    if (q.length === 0) { sec.style.display = 'none'; return; }
+    if (q.length === 0 || !window._ocrBatchActive) { sec.style.display = 'none'; return; }
     sec.style.display = 'block';
     if (!strip) return;
     var html = '';
@@ -3516,6 +3548,7 @@ async function startBatchOCR() {
     window._dupResults = [];
     window._ocrBatchAccum = [];
     window._ocrBatchFail = 0;
+    window._rvVerified = {};   // 新一批 = 新的核对进度
     var total = queue.length;
     window._ocrBatchMode = true;
     window._ocrBatchSink = _ocrBatchSinkFn;
@@ -3541,92 +3574,223 @@ async function startBatchOCR() {
     } else {
         showToast('批量识别完成：共 ' + window._ocrBatchAccum.length + ' 条', 'success');
     }
-    // 清空队列 UI
+    // 清空队列 UI（开关状态保持不变，方便继续添加）
     window._ocrBatchQueue = [];
-    window._ocrBatchActive = false;
     renderBatchStrip();
     updateReviewBtn();
+    // 批量识别完成后直接进入逐张核对
+    if (window._ocrBatchAccum.length) {
+        setTimeout(function() { openReviewOverlay(); }, 300);
+    }
 }
 
-// ==================== 逐张核对 ====================
+// ==================== 逐张核对（左=原图，右=该图的识别结果） ====================
+// 同一张图识别出来的账单归为一组
+function _rvGroupKeyOf(b) {
+    if (!b) return '__none__';
+    if (b._batchImgKey) return b._batchImgKey;
+    if (b._srcImg) return 'img_' + b._srcImg.length + '_' + b._srcImg.slice(-64);
+    return '__none__';
+}
+
+function buildReviewGroups() {
+    var bills = window._previewBills || [];
+    var verifiedMap = window._rvVerified || {};
+    var map = {}, order = [];
+    bills.forEach(function(b, i) {
+        var k = _rvGroupKeyOf(b);
+        if (!map[k]) {
+            map[k] = { key: k, img: b._srcImg || '', rows: [], verified: !!verifiedMap[k] };
+            order.push(k);
+        }
+        if (!map[k].img && b._srcImg) map[k].img = b._srcImg;
+        map[k].rows.push({ b: b, gi: i });
+    });
+    return order.map(function(k) { return map[k]; });
+}
+
 function openReviewOverlay() {
     var bills = window._previewBills || [];
     if (!bills.length) { showToast('没有可核对的账单', 'info'); return; }
     window._reviewIdx = 0;
+    window._rvZoom = false;
     var ov = document.getElementById('reviewOverlay');
     if (ov) ov.style.display = 'flex';
     renderReview();
 }
 
+// 单行 HTML：日期 / 账单户 / 收支 / 金额 / 备注（全部可改）
+function _rvRowHtml(b, gi) {
+    var type = b.type || '支出';
+    var cls = type === '收入' ? 'inc' : (type === '结余' ? 'bal' : 'exp');
+    var sign = (typeof _amountSignOf === 'function') ? _amountSignOf(type) : (type === '收入' ? '+' : '-');
+    var userName = (typeof _billUserName === 'function' && window._previewUserId) ? _billUserName(window._previewUserId) : '未选账单户';
+    var opts = '';
+    ['支出', '收入', '结余'].forEach(function(t) {
+        opts += '<option value="' + t + '"' + (type === t ? ' selected' : '') + '>' + t + '</option>';
+    });
+    return '<div class="rv-row' + (b._verified ? ' verified' : '') + '" data-gi="' + gi + '">' +
+        '<input class="rv-in rv-date" type="date" value="' + (b.date || '') + '" onchange="rvEdit(' + gi + ',\'date\',this)" onkeydown="rvEnterNext(event,this)">' +
+        '<span class="rv-user-badge">' + _escAttr(userName) + '</span>' +
+        '<select class="rv-in rv-type" onchange="rvEdit(' + gi + ',\'type\',this)">' + opts + '</select>' +
+        '<input class="rv-in rv-amount ' + cls + '" type="text" inputmode="decimal" value="' + sign + _formatAmount(b.amount) + '" onchange="rvEdit(' + gi + ',\'amount\',this)" onkeydown="rvEnterNext(event,this)">' +
+        '<input class="rv-in rv-note" type="text" value="' + _escAttr(b.note || '') + '" onchange="rvEdit(' + gi + ',\'note\',this)" onkeydown="rvEnterNext(event,this)">' +
+        '<button class="rv-del" title="删除这条（识别错的整行）" onclick="rvDeleteRow(' + gi + ')">✕</button>' +
+        '</div>';
+}
+
 function renderReview() {
     var bills = window._previewBills || [];
-    var idx = window._reviewIdx || 0;
-    if (idx >= bills.length) idx = bills.length - 1;
-    if (idx < 0) idx = 0;
-    window._reviewIdx = idx;
-    var b = bills[idx];
     var ov = document.getElementById('reviewOverlay');
-    if (!b) { if (ov) ov.style.display = 'none'; return; }
-    var total = bills.length;
-    var verifiedCount = bills.filter(function(x) { return x._verified; }).length;
-    var idxEl = document.getElementById('rvIdx'); if (idxEl) idxEl.textContent = (idx + 1) + ' / ' + total;
-    var vcEl = document.getElementById('rvVerifiedCount'); if (vcEl) vcEl.textContent = '已核对 ' + verifiedCount + ' / ' + total;
+    if (!bills.length) { if (ov) ov.style.display = 'none'; return; }
+
+    var groups = buildReviewGroups();
+    window._reviewGroups = groups;
+    var total = groups.length;
+    var gi = window._reviewIdx || 0;
+    if (gi >= total) gi = total - 1;
+    if (gi < 0) gi = 0;
+    window._reviewIdx = gi;
+    var g = groups[gi];
+    if (!g) { if (ov) ov.style.display = 'none'; return; }
+
+    var verifiedCount = groups.filter(function(x) { return x.verified; }).length;
+    var vcEl = document.getElementById('rvVerifiedCount');
+    if (vcEl) vcEl.textContent = '已核对 ' + verifiedCount + ' / ' + total;
+    var idxEl = document.getElementById('rvIdx'); if (idxEl) idxEl.textContent = (gi + 1) + ' / ' + total;
+    var rcEl = document.getElementById('rvRowCount'); if (rcEl) rcEl.textContent = g.rows.length;
+
+    // 左：原图（不是识别结果）
     var imgEl = document.getElementById('rvImg');
+    var noImg = document.getElementById('rvNoImg');
+    var boxEl = document.getElementById('rvImgBox');
     if (imgEl) {
-        if (b._srcImg) { imgEl.src = b._srcImg; imgEl.style.display = 'block'; }
-        else { imgEl.style.display = 'none'; }
+        if (g.img) {
+            imgEl.src = g.img;
+            imgEl.style.display = 'block';
+            if (noImg) noImg.style.display = 'none';
+        } else {
+            imgEl.style.display = 'none';
+            imgEl.removeAttribute('src');
+            if (noImg) noImg.style.display = 'block';
+        }
     }
-    var rawEl = document.getElementById('rvRaw'); if (rawEl) rawEl.textContent = b._srcText || '(无原文)';
-    var dEl = document.getElementById('rvDate'); if (dEl) dEl.value = b.date || '';
-    var tEl = document.getElementById('rvType'); if (tEl) tEl.value = b.type || '支出';
-    var aEl = document.getElementById('rvAmount');
-    if (aEl) {
-        var amtTxt = (b.type === '收入' ? '+' : (b.type === '结余' ? '' : '-')) + (typeof _formatAmount === 'function' ? _formatAmount(b.amount) : (b.amount || ''));
-        aEl.value = amtTxt;
+    if (boxEl) { if (window._rvZoom && g.img) { boxEl.classList.add('zoomed'); } else { boxEl.classList.remove('zoomed'); } }
+
+    // 右：这张图识别出的账单，逐行可改
+    var rowsEl = document.getElementById('rvRows');
+    if (rowsEl) {
+        var html = '<div class="rv-row rv-row-head">' +
+            '<span>日期</span><span>账单户</span><span>收支</span><span>金额</span><span>备注</span><span></span>' +
+            '</div>';
+        g.rows.forEach(function(it) { html += _rvRowHtml(it.b, it.gi); });
+        rowsEl.innerHTML = html;
     }
-    var nEl = document.getElementById('rvNote'); if (nEl) nEl.value = b.note || '';
-    var vbtn = document.getElementById('rvVerified');
+
+    var vbtn = document.getElementById('rvVerifyBtn');
     if (vbtn) {
-        vbtn.textContent = b._verified ? '✓ 已核对' : '○ 标记核对';
-        vbtn.className = 'btn ' + (b._verified ? 'btn-primary' : 'btn-outline');
+        if (g.verified) { vbtn.classList.add('done'); vbtn.textContent = '✓ 本张已核对'; }
+        else { vbtn.classList.remove('done'); vbtn.textContent = '○ 本张已核对'; }
     }
-    var prevBtn = document.getElementById('rvPrev'); if (prevBtn) prevBtn.disabled = (idx <= 0);
-    var nextBtn = document.getElementById('rvNext'); if (nextBtn) nextBtn.disabled = (idx >= total - 1);
+    var prevBtn = document.getElementById('rvPrev'); if (prevBtn) prevBtn.disabled = (gi <= 0);
+    var nextBtn = document.getElementById('rvNext'); if (nextBtn) nextBtn.disabled = (gi >= total - 1);
 }
 
 function reviewNav(dir) {
-    var total = (window._previewBills || []).length;
-    window._reviewIdx = (window._reviewIdx || 0) + dir;
-    if (window._reviewIdx < 0) window._reviewIdx = 0;
-    if (window._reviewIdx >= total) window._reviewIdx = total - 1;
+    var total = (window._reviewGroups || []).length || 1;
+    var gi = (window._reviewIdx || 0) + dir;
+    if (gi < 0) gi = 0;
+    if (gi >= total) gi = total - 1;
+    window._reviewIdx = gi;
+    window._rvZoom = false;
     renderReview();
 }
 
-function reviewSaveField() {
+// 回车 = 提交当前格并失焦（触发 change）
+function rvEnterNext(e, el) {
+    if (e.key === 'Enter') { e.preventDefault(); el.blur(); }
+}
+
+// 修改某一行的某个字段
+function rvEdit(gi, field, el) {
     var bills = window._previewBills || [];
-    var b = bills[window._reviewIdx || 0];
+    var b = bills[gi];
     if (!b) return;
-    b.date = document.getElementById('rvDate').value;
-    b.type = document.getElementById('rvType').value;
-    var amtRaw = (document.getElementById('rvAmount').value || '').replace(/[+\-\s,]/g, '');
-    var num = parseFloat(amtRaw);
-    if (!isNaN(num)) b.amount = num;
-    b.note = document.getElementById('rvNote').value;
-    // 同步刷新背后预览表（含去重/渲染）
+    var val = el.value;
+
+    if (field === 'date') {
+        b.date = val;
+        el.classList.remove('rv-bad');
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(val)) { el.classList.add('rv-bad'); showToast('日期格式应为 YYYY-MM-DD', 'error'); }
+    } else if (field === 'type') {
+        b.type = val;
+        var row = el.parentNode;
+        var amt = row ? row.querySelector('.rv-amount') : null;
+        if (amt) {
+            amt.value = _amountSignOf(val) + _formatAmount(b.amount);
+            amt.className = 'rv-in rv-amount ' + (val === '收入' ? 'inc' : (val === '结余' ? 'bal' : 'exp'));
+        }
+    } else if (field === 'amount') {
+        updatePreviewAmount(gi, val);
+        el.value = _amountSignOf(b.type) + _formatAmount(b.amount);
+    } else if (field === 'note') {
+        b.note = val;
+    }
+
+    if (typeof recheckDuplicates === 'function') recheckDuplicates();
+}
+
+// 删除识别错误的一行
+function rvDeleteRow(gi) {
+    var bills = window._previewBills || [];
+    if (!bills[gi]) return;
+    bills.splice(gi, 1);
+    if (!bills.length) {
+        closeReviewOverlay();
+        showToast('已删除最后一条，预览已清空', 'info');
+        return;
+    }
+    // 索引变了，整表和后台预览都要重排
     showPreview(bills, window._previewUserId);
+    window._reviewIdx = Math.min(window._reviewIdx || 0, Math.max(0, buildReviewGroups().length - 1));
+    renderReview();
+    showToast('已删除 1 条', 'success');
 }
 
-function toggleReviewVerified() {
-    var bills = window._previewBills || [];
-    var b = bills[window._reviewIdx || 0];
-    if (!b) return;
-    b._verified = !b._verified;
+// 标记 / 取消标记这张图已核对
+function rvToggleVerified() {
+    var groups = window._reviewGroups || [];
+    var g = groups[window._reviewIdx || 0];
+    if (!g) return;
+    g.verified = !g.verified;
+    window._rvVerified = window._rvVerified || {};
+    window._rvVerified[g.key] = g.verified;
+    g.rows.forEach(function(it) { if (it.b) it.b._verified = g.verified; });
     renderReview();
 }
+
+// 点击原图放大 / 还原
+function rvToggleZoom() {
+    var groups = window._reviewGroups || [];
+    var g = groups[window._reviewIdx || 0];
+    if (!g || !g.img) return;
+    window._rvZoom = !window._rvZoom;
+    var box = document.getElementById('rvImgBox');
+    if (box) { if (window._rvZoom) { box.classList.add('zoomed'); } else { box.classList.remove('zoomed'); } }
+}
+
+// 兼容旧调用名
+function toggleReviewVerified() { rvToggleVerified(); }
+function reviewSaveField() { /* 旧版整体保存，已改为逐行即时保存 */ }
 
 function closeReviewOverlay() {
     var ov = document.getElementById('reviewOverlay');
     if (ov) ov.style.display = 'none';
+    window._rvZoom = false;
+    // 核对过程中的修改同步回背后预览表（含重复检测）
+    if (window._previewBills && window._previewBills.length) {
+        showPreview(window._previewBills, window._previewUserId);
+    }
 }
 
 // ==================== 粘贴功能 ====================
@@ -4294,6 +4458,19 @@ function showPreview(bills, userId) {
         if (window._ocrBatchSink) window._ocrBatchSink(bills, window._ocrLastText);
         return;
     }
+    // 单图识别：把原图挂到这批账单上，供「逐张核对」左栏显示原始截图
+    if (!window._ocrBatchMode && window._pendingImgForPreview && Array.isArray(bills)) {
+        var _pv = window._pendingImgForPreview;
+        var _pvImg = _pv.img || ((window._singleImgCache && window._singleImgCache.key === _pv.key) ? window._singleImgCache.img : '');
+        bills.forEach(function(b) {
+            if (!b) return;
+            if (_pvImg) b._srcImg = _pvImg;
+            if (!b._srcText) b._srcText = window._ocrLastText || '';
+            b._batchImgKey = _pv.key;
+        });
+        window._singleImgCache = { key: _pv.key, img: _pvImg };
+        window._pendingImgForPreview = null;
+    }
     // 自动去除 OCR 字间距（中文与中文之间的空格）
     if (Array.isArray(bills)) {
         bills.forEach(function(b) {
@@ -4701,6 +4878,16 @@ function escapeHtml(str) {
     var div = document.createElement('div');
     div.textContent = str;
     return div.innerHTML;
+}
+
+// 属性值转义：比 escapeHtml 多处理引号，避免备注里的 " 撑破 value=""
+function _escAttr(str) {
+    return String(str == null ? '' : str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
 }
 
 function updatePreviewDate(idx, val) {
@@ -5384,7 +5571,14 @@ function captureFullscreenPhoto() {
 
 function handleCameraCapture(input) {
     var file = (input && input.files) ? input.files[0] : null;
-    if (file) { processImageOCR(file); }
+    if (!file) return;
+    // 多图模式：拍照也进批量队列，凑齐后一次性识别
+    if (window._ocrBatchActive) {
+        addFilesToBatch([file]);
+    } else {
+        processImageOCR(file);
+    }
+    input.value = '';
 }
 
 // ==================== OCR 截图识别 ====================
@@ -6526,6 +6720,28 @@ function processImageOCR(file) {
     clearAllBoxes();
     var reBtn = document.getElementById('btnReRecognize');
     if (reBtn) reBtn.classList.remove('visible');
+
+    // 单图模式：把原始图片留一份给「逐张核对」，左边要显示原图
+    if (!window._ocrBatchMode) {
+        window._rvVerified = {};   // 新图 = 新的核对进度
+        var _rvPendingKey = 'single_' + Date.now();
+        window._pendingImgForPreview = { key: _rvPendingKey, img: '' };
+        try {
+            var _rvReader = new FileReader();
+            _rvReader.onload = function(ev) {
+                var _dataUrl = ev.target.result;
+                window._singleImgCache = { key: _rvPendingKey, img: _dataUrl };
+                if (window._pendingImgForPreview && window._pendingImgForPreview.key === _rvPendingKey) {
+                    window._pendingImgForPreview.img = _dataUrl;
+                }
+                // 预览若已先渲染出来，补挂原图（异步竞态兜底）
+                (window._previewBills || []).forEach(function(b) {
+                    if (b && b._batchImgKey === _rvPendingKey && !b._srcImg) b._srcImg = _dataUrl;
+                });
+            };
+            _rvReader.readAsDataURL(file);
+        } catch (e) { console.warn('[核对] 读取原图失败', e); }
+    }
 
     // 显示图片预览（批量模式跳过单图调试预览）
     if (!window._ocrBatchMode) {
@@ -7961,6 +8177,8 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     })();
     init();
+    // 还原「多图识别」开关上次的状态
+    restoreBatchSwitch();
     // 右下角「+」按钮可拖动
     initFabDrag();
 });

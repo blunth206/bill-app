@@ -561,7 +561,14 @@ async function handleRequest(request) {
                             <input type="file" id="billFileInput" accept=".csv,.txt,.xlsx,.xls,.png,.jpg,.jpeg,.pdf" multiple onchange="handleFileSelect(this)" class="visually-hidden">
                             <button class="btn btn-file-camera" onclick="document.getElementById('cameraInput').click()">📷 拍照</button>
                             <button class="btn btn-file-select" onclick="document.getElementById('billFileInput').click()">📁 选择文件</button>
-                            <button class="btn btn-file-batch" onclick="enableBatchMode()">📚 多图识别</button>
+                            <div class="batch-mode-toggle">
+                                <span class="batch-toggle-label">多图识别</span>
+                                <button type="button" class="batch-switch" id="batchSwitch" role="switch" aria-checked="false"
+                                        onclick="toggleBatchMode()" title="开启后可一次选择/拍摄多张截图，批量识别后逐张核对">
+                                    <span class="batch-switch-knob"></span>
+                                    <span class="batch-switch-text" id="batchSwitchText">关</span>
+                                </button>
+                            </div>
                         </div>
                     </div>
                     <!-- 多图批量识别队列 -->
@@ -787,52 +794,44 @@ async function handleRequest(request) {
         </div>
     </div>
 
-    <!-- 逐张核对浮层 -->
+    <!-- 逐张核对浮层：左=原图（不是识别结果），右=该图识别出的账单列表（可直接改） -->
     <div class="modal-overlay" id="reviewOverlay" style="display:none;z-index:1200;">
-        <div class="modal" style="max-width:680px;width:94%;">
-            <div class="modal-header">
+        <div class="review-modal">
+            <div class="review-head">
                 <h3>👁 逐张核对账单</h3>
                 <button class="btn-close" onclick="closeReviewOverlay()">✕</button>
             </div>
-            <div class="modal-body">
-                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:6px;">
-                    <span id="rvIdx" style="font-weight:700;color:#4f46e5;">1 / 1</span>
-                    <span id="rvVerifiedCount" style="font-size:13px;color:#64748b;">已核对 0 / 0</span>
-                    <div style="display:flex;gap:6px;">
-                        <button class="btn btn-outline btn-sm" id="rvPrev" onclick="reviewNav(-1)">‹ 上一张</button>
-                        <button class="btn btn-outline btn-sm" id="rvNext" onclick="reviewNav(1)">下一张 ›</button>
+            <div class="review-subbar">
+                <span id="rvVerifiedCount">已核对 0 / 0</span>
+                <span class="review-subbar-hint">左边对原图，右边改结果</span>
+            </div>
+            <div class="review-body">
+                <div class="review-left">
+                    <div class="review-cap">原图 <span class="review-cap-hint">点击可放大 / 还原</span></div>
+                    <div class="review-img-box" id="rvImgBox" onclick="rvToggleZoom()">
+                        <img id="rvImg" src="" alt="原图" style="display:none;">
+                        <div class="rv-noimg" id="rvNoImg">这张图没有留存原图<br><span>（只有识别文本）</span></div>
                     </div>
                 </div>
-                <div style="display:flex;gap:14px;flex-wrap:wrap;">
-                    <div style="flex:1;min-width:240px;">
-                        <div style="font-size:12px;color:#94a3b8;margin-bottom:4px;">来源截图</div>
-                        <img id="rvImg" src="" alt="来源截图" style="display:none;max-width:100%;max-height:320px;border-radius:8px;border:1px solid #e2e8f0;">
-                        <div id="rvRawWrap" style="margin-top:8px;">
-                            <div style="font-size:12px;color:#94a3b8;margin-bottom:4px;">OCR 原文</div>
-                            <pre id="rvRaw" style="white-space:pre-wrap;word-break:break-word;max-height:160px;overflow:auto;font-size:11px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:8px;margin:0;"></pre>
-                        </div>
+                <div class="review-divider"></div>
+                <div class="review-right">
+                    <div class="review-cap review-cap-split">
+                        <span>识别结果 <b id="rvRowCount">0</b> 条 · 可直接修改</span>
+                        <button class="rv-verify-btn" id="rvVerifyBtn" onclick="rvToggleVerified()">○ 本张已核对</button>
                     </div>
-                    <div style="flex:1;min-width:240px;">
-                        <div style="font-size:12px;color:#94a3b8;margin-bottom:4px;">核对结果（可直接修改）</div>
-                        <div style="display:flex;flex-direction:column;gap:8px;">
-                            <label style="font-size:13px;">日期<br><input type="date" id="rvDate" onchange="reviewSaveField()" style="width:100%;padding:6px 8px;border:1px solid #ddd;border-radius:6px;"></label>
-                            <label style="font-size:13px;">类型<br>
-                                <select id="rvType" onchange="reviewSaveField()" style="width:100%;padding:6px 8px;border:1px solid #ddd;border-radius:6px;">
-                                    <option value="支出">支出</option>
-                                    <option value="收入">收入</option>
-                                    <option value="结余">结余</option>
-                                </select>
-                            </label>
-                            <label style="font-size:13px;">金额<br><input type="text" inputmode="decimal" id="rvAmount" onchange="reviewSaveField()" style="width:100%;padding:6px 8px;border:1px solid #ddd;border-radius:6px;"></label>
-                            <label style="font-size:13px;">备注<br><input type="text" id="rvNote" onchange="reviewSaveField()" style="width:100%;padding:6px 8px;border:1px solid #ddd;border-radius:6px;"></label>
-                            <button class="btn btn-primary" id="rvVerified" onclick="toggleReviewVerified()" style="margin-top:4px;">○ 标记核对</button>
-                        </div>
-                    </div>
+                    <div class="rv-rows" id="rvRows"></div>
                 </div>
             </div>
-            <div class="modal-footer">
-                <button class="btn btn-outline" onclick="closeReviewOverlay()">关闭</button>
-                <button class="btn btn-primary" onclick="closeReviewOverlay()">核对完毕，去导入</button>
+            <div class="review-foot">
+                <div class="rv-pager">
+                    <span id="rvIdx">1 / 1</span>
+                    <button class="btn btn-outline btn-sm" id="rvPrev" onclick="reviewNav(-1)">‹ 上一张</button>
+                    <button class="btn btn-outline btn-sm" id="rvNext" onclick="reviewNav(1)">下一张 ›</button>
+                </div>
+                <div class="rv-foot-actions">
+                    <button class="btn btn-outline" onclick="closeReviewOverlay()">关闭</button>
+                    <button class="btn btn-primary" onclick="closeReviewOverlay()">核对完毕，去导入</button>
+                </div>
             </div>
         </div>
     </div>
