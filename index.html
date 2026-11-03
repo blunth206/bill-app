@@ -804,6 +804,11 @@ async function handleRequest(request) {
             <div class="review-subbar">
                 <span id="rvVerifiedCount">已核对 0 / 0</span>
                 <span class="review-subbar-hint">左边对原图，右边改结果</span>
+                <div class="rv-pager rv-pager-top">
+                    <button class="btn btn-outline btn-sm" id="rvPrevTop" onclick="reviewNav(-1)">‹ 上一张</button>
+                    <span id="rvIdxTop">1 / 1</span>
+                    <button class="btn btn-outline btn-sm" id="rvNextTop" onclick="reviewNav(1)">下一张 ›</button>
+                </div>
             </div>
             <div class="review-body">
                 <div class="review-left">

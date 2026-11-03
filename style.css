@@ -3337,6 +3337,19 @@ div[id*="eop-banner"],
     color: #2F80ED;
 }
 
+/* 顶部同款翻页（右上角），与底部翻页双通道 */
+.rv-pager-top {
+    margin-left: auto;
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.rv-pager-top .btn {
+    padding: 3px 9px;
+    font-size: 12px;
+    line-height: 1.2;
+}
+
 .rv-foot-actions { display: flex; gap: 8px; }
 
 @media (max-width: 760px) {

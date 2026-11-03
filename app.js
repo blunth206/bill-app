@@ -3346,8 +3346,10 @@ function onImportUserChange() {
         }
     });
     dropZone.addEventListener('click', function(e) {
-        // 如果点击的是按钮或input，不要重复触发
-        if (e.target.tagName === 'BUTTON' || e.target.tagName === 'INPUT' || e.target.tagName === 'LABEL') return;
+        // 点在按钮/开关/输入框（含它们内部的 span 子元素）上时，不要触发选择文件
+        var t = e.target;
+        if (t && t.closest && t.closest('button, input, label, select, a, .batch-mode-toggle, .file-type-tags')) return;
+        if (t && (t.tagName === 'BUTTON' || t.tagName === 'INPUT' || t.tagName === 'LABEL')) return;
         document.getElementById('billFileInput').click();
     });
 })();
@@ -3506,10 +3508,17 @@ function updateReviewBtn() {
     if (el) el.textContent = (window._previewBills || []).length;
 }
 
-// 批量调度：收集单张识别结果（processImageOCR 在批量模式下会把 showPreview 重定向到这里）
+// 批量调度：每张图一个独立上下文（key/img/resolve/timer），
+// 避免上一张图「迟到的完成回调」把下一张图提前结束（会导致结果串图、只留一张）
+function _newBatchCtx(key, img, resolve) {
+    return { key: key, img: img || '', done: false, resolve: resolve, timer: null };
+}
+
+// 收集单张识别结果（processImageOCR 在批量模式下会把 showPreview 重定向到这里）
 function _ocrBatchSinkFn(bills, text) {
-    var key = window._currentBatchImgKey;
-    var img = window._currentBatchImgDataUrl || '';
+    var ctx = window._ocrBatchCtx;
+    var key = (ctx && ctx.key) || window._currentBatchImgKey || ('img_' + Date.now());
+    var img = (ctx && ctx.img) || window._currentBatchImgDataUrl || '';
     // 同一张图可能因二次精细识别产生两次结果，用 key 去重，保留最后一次
     window._ocrBatchAccum = (window._ocrBatchAccum || []).filter(function(b) { return b._batchImgKey !== key; });
     (bills || []).forEach(function(b) {
@@ -3520,21 +3529,41 @@ function _ocrBatchSinkFn(bills, text) {
         b._batchImgKey = key;
         window._ocrBatchAccum.push(b);
     });
-    _finishBatchImage();
+    // 注意：这里不结束该张图。等整条处理链走完再结束，保证严格串行、结果不串图。
 }
 
-function _finishBatchImage() {
-    if (window._ocrBatchResolve) {
-        var r = window._ocrBatchResolve;
-        window._ocrBatchResolve = null;
-        r();
-    }
+// 结束当前这张图：只认自己那一份 ctx；重复调用 / 上一张的迟到调用一律忽略
+function _finishBatchImage(ctx) {
+    if (!ctx) ctx = window._ocrBatchCtx;
+    if (!ctx || ctx.done) return;
+    if (window._ocrBatchCtx !== ctx) return;
+    ctx.done = true;
+    if (ctx.timer) { try { clearTimeout(ctx.timer); } catch (e) {} }
+    var r = ctx.resolve;
+    window._ocrBatchCtx = null;
+    window._ocrBatchResolve = null;
+    if (r) { try { r(); } catch (e) {} }
 }
 
-function _runOneImage(file) {
+function _runOneImage(file, key, img) {
     return new Promise(function(resolve) {
+        var ctx = _newBatchCtx(key, img, resolve);
+        window._ocrBatchCtx = ctx;
         window._ocrBatchResolve = resolve;
-        processImageOCR(file);
+        window._currentBatchImgKey = key;
+        window._currentBatchImgDataUrl = img || '';
+        // 看门狗：万一识别接口挂住，也不会卡死整批
+        ctx.timer = setTimeout(function() {
+            if (ctx.done) return;
+            console.warn('[批量识别] ' + key + ' 超时（180s），跳过');
+            _finishBatchImage(ctx);
+        }, 180000);
+        try {
+            processImageOCR(file);
+        } catch (e) {
+            console.warn('[批量识别] ' + key + ' 抛错', e);
+            _finishBatchImage(ctx);
+        }
     });
 }
 
@@ -3548,6 +3577,7 @@ async function startBatchOCR() {
     window._dupResults = [];
     window._ocrBatchAccum = [];
     window._ocrBatchFail = 0;
+    window._ocrBatchFailKeys = [];
     window._rvVerified = {};   // 新一批 = 新的核对进度
     var total = queue.length;
     window._ocrBatchMode = true;
@@ -3557,20 +3587,30 @@ async function startBatchOCR() {
     if (prog) prog.style.display = 'flex';
     for (var i = 0; i < total; i++) {
         var item = queue[i];
-        window._currentBatchImgKey = 'img_' + i;
-        window._currentBatchImgDataUrl = item.dataUrl || '';
+        var key = 'img_' + i;
         var before = window._ocrBatchAccum.length;
-        if (ptext) ptext.textContent = '正在识别 ' + (i + 1) + ' / ' + total;
-        await _runOneImage(item.file);
-        if (window._ocrBatchAccum.length === before) window._ocrBatchFail++;
+        if (ptext) {
+            ptext.textContent = '正在识别 ' + (i + 1) + ' / ' + total
+                + ((i === 0 && _ocrEngine === 'browser') ? '（首次加载模型较慢）' : '');
+        }
+        await _runOneImage(item.file, key, item.dataUrl || '');
+        if (window._ocrBatchAccum.length === before) {
+            window._ocrBatchFail++;
+            window._ocrBatchFailKeys.push(i + 1);
+        }
     }
     window._ocrBatchMode = false;
+    window._ocrBatchSink = null;
+    window._ocrBatchCtx = null;
+    window._currentBatchImgKey = null;
+    window._currentBatchImgDataUrl = '';
     if (prog) prog.style.display = 'none';
     if (typeof resetOCREngineToDefault === 'function') resetOCREngineToDefault();
     // 渲染完整预览表
     showPreview(window._ocrBatchAccum, userId);
     if (window._ocrBatchFail > 0) {
-        showToast('批量识别完成：成功 ' + window._ocrBatchAccum.length + ' 条，无结果 ' + window._ocrBatchFail + ' 张', 'info');
+        showToast('批量识别完成：成功 ' + window._ocrBatchAccum.length + ' 条，无结果 ' + window._ocrBatchFail + ' 张（第 '
+            + (window._ocrBatchFailKeys || []).join('、') + ' 张）', 'info');
     } else {
         showToast('批量识别完成：共 ' + window._ocrBatchAccum.length + ' 条', 'success');
     }
@@ -3590,7 +3630,17 @@ function _rvGroupKeyOf(b) {
     if (!b) return '__none__';
     if (b._batchImgKey) return b._batchImgKey;
     if (b._srcImg) return 'img_' + b._srcImg.length + '_' + b._srcImg.slice(-64);
+    // 原图丢了也尽量按原始识别文本分组，避免所有行塌成一组
+    if (b._srcText) return 'txt_' + b._srcText.length + '_' + _rvHash(b._srcText);
     return '__none__';
+}
+
+// 简易字符串哈希（仅用于分组 key，不追求强度）
+function _rvHash(s) {
+    var h = 0, i;
+    s = String(s || '');
+    for (i = 0; i < s.length; i++) { h = (h * 31 + s.charCodeAt(i)) | 0; }
+    return Math.abs(h).toString(36);
 }
 
 function buildReviewGroups() {
@@ -3658,6 +3708,7 @@ function renderReview() {
     var vcEl = document.getElementById('rvVerifiedCount');
     if (vcEl) vcEl.textContent = '已核对 ' + verifiedCount + ' / ' + total;
     var idxEl = document.getElementById('rvIdx'); if (idxEl) idxEl.textContent = (gi + 1) + ' / ' + total;
+    var idxTopEl = document.getElementById('rvIdxTop'); if (idxTopEl) idxTopEl.textContent = (gi + 1) + ' / ' + total;
     var rcEl = document.getElementById('rvRowCount'); if (rcEl) rcEl.textContent = g.rows.length;
 
     // 左：原图（不是识别结果）
@@ -3694,6 +3745,9 @@ function renderReview() {
     }
     var prevBtn = document.getElementById('rvPrev'); if (prevBtn) prevBtn.disabled = (gi <= 0);
     var nextBtn = document.getElementById('rvNext'); if (nextBtn) nextBtn.disabled = (gi >= total - 1);
+    // 顶部同款翻页按钮
+    var prevTop = document.getElementById('rvPrevTop'); if (prevTop) prevTop.disabled = (gi <= 0);
+    var nextTop = document.getElementById('rvNextTop'); if (nextTop) nextTop.disabled = (gi >= total - 1);
 }
 
 function reviewNav(dir) {
@@ -4459,17 +4513,19 @@ function showPreview(bills, userId) {
         return;
     }
     // 单图识别：把原图挂到这批账单上，供「逐张核对」左栏显示原始截图
-    if (!window._ocrBatchMode && window._pendingImgForPreview && Array.isArray(bills)) {
-        var _pv = window._pendingImgForPreview;
-        var _pvImg = _pv.img || ((window._singleImgCache && window._singleImgCache.key === _pv.key) ? window._singleImgCache.img : '');
-        bills.forEach(function(b) {
-            if (!b) return;
-            if (_pvImg) b._srcImg = _pvImg;
-            if (!b._srcText) b._srcText = window._ocrLastText || '';
-            b._batchImgKey = _pv.key;
-        });
-        window._singleImgCache = { key: _pv.key, img: _pvImg };
-        window._pendingImgForPreview = null;
+    // 只补空缺字段，绝不覆盖已有分组信息（否则会把批量识别的多张图塌成一张）
+    if (!window._ocrBatchMode && Array.isArray(bills)) {
+        var _pv = window._pendingImgForPreview || window._singleImgCache || null;
+        if (_pv && _pv.key) {
+            var _pvImg = _pv.img || ((window._singleImgCache && window._singleImgCache.key === _pv.key) ? window._singleImgCache.img : '');
+            if (_pvImg) window._singleImgCache = { key: _pv.key, img: _pvImg };
+            bills.forEach(function(b) {
+                if (!b) return;
+                if (!b._batchImgKey) b._batchImgKey = _pv.key;
+                if (!b._srcImg && _pvImg) b._srcImg = _pvImg;
+                if (!b._srcText) b._srcText = window._ocrLastText || '';
+            });
+        }
     }
     // 自动去除 OCR 字间距（中文与中文之间的空格）
     if (Array.isArray(bills)) {
@@ -6617,16 +6673,26 @@ function ocrBrowser(imageDataUrl) {
 }
 
 // 读取原图为 canvas（本地强模型用原图，跳过 Tesseract 二值化预处理）
-function readOriginalCanvas(file) {
+// maxLong：限制最长边像素。手机截图动辄 1080×2400（260 万像素），
+// 直接丢进 ONNX 检测模型会非常慢；缩到 1600 长边后速度约快 2 倍，账单文字仍清晰。
+function readOriginalCanvas(file, maxLong) {
     return new Promise(function(resolve, reject) {
         var fr = new FileReader();
         fr.onload = function() {
             var img = new Image();
             img.onload = function() {
+                var w = img.width, h = img.height;
+                var scale = 1;
+                if (maxLong && Math.max(w, h) > maxLong) scale = maxLong / Math.max(w, h);
                 var canvas = document.createElement('canvas');
-                canvas.width = img.width;
-                canvas.height = img.height;
-                canvas.getContext('2d').drawImage(img, 0, 0);
+                canvas.width = Math.max(1, Math.round(w * scale));
+                canvas.height = Math.max(1, Math.round(h * scale));
+                var ctx = canvas.getContext('2d');
+                if (ctx.imageSmoothingEnabled !== undefined) {
+                    ctx.imageSmoothingEnabled = true;
+                    ctx.imageSmoothingQuality = 'high';
+                }
+                ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
                 resolve(canvas);
             };
             img.onerror = function() { reject(new Error('图片解码失败')); };
@@ -6640,7 +6706,11 @@ function readOriginalCanvas(file) {
 // 根据当前引擎选择待识别图片：
 // 本地模型(local) 用原图 canvas；云端百度/腾讯 走接口时自带原图；Tesseract 走对应预处理
 function prepareOCRImage(file, mode) {
-    if (_ocrEngine === 'local' || _ocrEngine === 'browser') {
+    if (_ocrEngine === 'browser') {
+        // 浏览器端强模型：限制长边，明显提速（识别率基本不受影响）
+        return readOriginalCanvas(file, 1600);
+    }
+    if (_ocrEngine === 'local') {
         return readOriginalCanvas(file);
     }
     if (mode === 'transfer') return preprocessImageForTransfer(file);
@@ -6710,6 +6780,9 @@ function reRecognize() {
 function processImageOCR(file) {
     var userId = document.getElementById('importUser').value;
     if (!userId) { _blinkImportUser(); }
+
+    // 批量模式：锁定本次运行自己的上下文（后面所有完成回调只认它，避免串图）
+    var _bc = window._ocrBatchCtx || null;
 
     // 重置学习修正信息
     window._ocrCorrectionInfo = null;
@@ -6796,8 +6869,8 @@ function processImageOCR(file) {
 
             // 第二关：根据模式选择解析
             if (mode === 'wechatBill') {
-                // 微信账单列表：Tesseract 用激进预处理重新识别，提升精度；本地模型一次识别即可
-                if (_ocrEngine === 'local') {
+                // 微信账单列表：Tesseract 用激进预处理重新识别，提升精度；本地模型/浏览器强模型一次识别即可
+                if (_ocrEngine === 'local' || _ocrEngine === 'browser') {
                     return parseOCRText(text, userId, mode);
                 }
                 return preprocessImage(file).then(function(processed2) {
@@ -6823,18 +6896,18 @@ function processImageOCR(file) {
             if (!window._ocrBatchMode) progressDiv.style.display = 'none';
             showToast('OCR识别失败：' + err.message, 'error');
             // 通知批量调度：本张图片识别失败，放行继续下一张
-            _finishBatchImage();
+            _finishBatchImage(_bc);
         }).then(function() {
             // 识别完成后自动恢复为默认引擎 Tesseract（批量模式整体结束后统一恢复）
             if (!window._ocrBatchMode) resetOCREngineToDefault();
             // 通知批量调度：本张图片处理完成
-            _finishBatchImage();
+            _finishBatchImage(_bc);
         });
     }).catch(function(err) {
         if (!window._ocrBatchMode) progressDiv.style.display = 'none';
         showToast('图片处理失败：' + err.message, 'error');
         // 通知批量调度：本张图片处理完成（失败也要放行，继续下一张）
-        _finishBatchImage();
+        _finishBatchImage(_bc);
     });
 }
 
