@@ -3337,7 +3337,13 @@ function onImportUserChange() {
         e.preventDefault();
         dropZone.classList.remove('dragover');
         var files = e.dataTransfer.files;
-        if (files.length > 0) processFile(files[0]);
+        if (!files || files.length === 0) return;
+        if (files.length > 1 || window._ocrBatchActive) {
+            enableBatchMode();
+            addFilesToBatch(files);
+        } else {
+            processFile(files[0]);
+        }
     });
     dropZone.addEventListener('click', function(e) {
         // 如果点击的是按钮或input，不要重复触发
@@ -3347,8 +3353,14 @@ function onImportUserChange() {
 })();
 
 function handleFileSelect(input) {
-    var file = (input && input.files) ? input.files[0] : null;
-    if (file) processFile(file);
+    var files = (input && input.files) ? input.files : null;
+    if (!files || files.length === 0) return;
+    if (files.length > 1 || window._ocrBatchActive) {
+        addFilesToBatch(files);
+    } else {
+        processFile(files[0]);
+    }
+    input.value = ''; // 允许再次选择同一个文件
 }
 
 function processFile(file) {
@@ -3390,6 +3402,231 @@ function processFile(file) {
     } else {
         showToast('不支持的文件格式', 'error');
     }
+}
+
+// ==================== 多图批量识别 ====================
+function enableBatchMode() {
+    window._ocrBatchActive = true;
+    if (!window._ocrBatchQueue) window._ocrBatchQueue = [];
+    renderBatchStrip();
+    showToast('已开启多图模式：可继续添加图片，准备好后点「开始批量识别」', 'info');
+}
+
+// 把文件加入批量队列（图片进队列，CSV/Excel 等非图片逐张走原逻辑）
+function addFilesToBatch(files) {
+    if (!window._ocrBatchActive) enableBatchMode();
+    if (!window._ocrBatchQueue) window._ocrBatchQueue = [];
+    Array.prototype.slice.call(files || []).forEach(function(file) {
+        var ext = (file.name.split('.').pop() || '').toLowerCase();
+        if (ext === 'png' || ext === 'jpg' || ext === 'jpeg') {
+            var reader = new FileReader();
+            reader.onload = function(e) {
+                window._ocrBatchQueue.push({
+                    file: file, name: file.name,
+                    dataUrl: e.target.result, thumbUrl: e.target.result
+                });
+                renderBatchStrip();
+            };
+            reader.onerror = function() { showToast('读取图片失败：' + file.name, 'error'); };
+            reader.readAsDataURL(file);
+        } else {
+            processFile(file);
+        }
+    });
+}
+
+function removeBatchImage(idx) {
+    if (!window._ocrBatchQueue) return;
+    window._ocrBatchQueue.splice(idx, 1);
+    renderBatchStrip();
+}
+
+function clearBatchQueue() {
+    window._ocrBatchQueue = [];
+    window._ocrBatchActive = false;
+    renderBatchStrip();
+}
+
+function renderBatchStrip() {
+    var q = window._ocrBatchQueue || [];
+    var sec = document.getElementById('ocrBatchSection');
+    var strip = document.getElementById('ocrBatchStrip');
+    var cnt = document.getElementById('ocrBatchCount');
+    var cnt2 = document.getElementById('batchCount2');
+    if (cnt) cnt.textContent = q.length;
+    if (cnt2) cnt2.textContent = q.length;
+    if (!sec) return;
+    if (q.length === 0) { sec.style.display = 'none'; return; }
+    sec.style.display = 'block';
+    if (!strip) return;
+    var html = '';
+    q.forEach(function(it, i) {
+        html += '<div style="position:relative;width:64px;height:64px;border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;background:#fff;">'
+            + '<img src="' + it.thumbUrl + '" style="width:100%;height:100%;object-fit:cover;" alt="">'
+            + '<button onclick="removeBatchImage(' + i + ')" style="position:absolute;top:2px;right:2px;width:18px;height:18px;line-height:16px;padding:0;border:none;border-radius:50%;background:rgba(0,0,0,.55);color:#fff;cursor:pointer;font-size:12px;">✕</button>'
+            + '</div>';
+    });
+    strip.innerHTML = html;
+}
+
+function updateReviewBtn() {
+    var el = document.getElementById('reviewCount');
+    if (el) el.textContent = (window._previewBills || []).length;
+}
+
+// 批量调度：收集单张识别结果（processImageOCR 在批量模式下会把 showPreview 重定向到这里）
+function _ocrBatchSinkFn(bills, text) {
+    var key = window._currentBatchImgKey;
+    var img = window._currentBatchImgDataUrl || '';
+    // 同一张图可能因二次精细识别产生两次结果，用 key 去重，保留最后一次
+    window._ocrBatchAccum = (window._ocrBatchAccum || []).filter(function(b) { return b._batchImgKey !== key; });
+    (bills || []).forEach(function(b) {
+        if (!b) return;
+        b._srcText = (text || window._ocrLastText || '');
+        b._srcImg = img;
+        b._verified = false;
+        b._batchImgKey = key;
+        window._ocrBatchAccum.push(b);
+    });
+    _finishBatchImage();
+}
+
+function _finishBatchImage() {
+    if (window._ocrBatchResolve) {
+        var r = window._ocrBatchResolve;
+        window._ocrBatchResolve = null;
+        r();
+    }
+}
+
+function _runOneImage(file) {
+    return new Promise(function(resolve) {
+        window._ocrBatchResolve = resolve;
+        processImageOCR(file);
+    });
+}
+
+async function startBatchOCR() {
+    var queue = window._ocrBatchQueue || [];
+    if (!queue.length) { showToast('队列为空，请先添加图片', 'info'); return; }
+    var userId = document.getElementById('importUser').value;
+    if (!userId) { _blinkImportUser(); return; }
+    // 清空上一次预览
+    window._previewBills = [];
+    window._dupResults = [];
+    window._ocrBatchAccum = [];
+    window._ocrBatchFail = 0;
+    var total = queue.length;
+    window._ocrBatchMode = true;
+    window._ocrBatchSink = _ocrBatchSinkFn;
+    var prog = document.getElementById('ocrProgress');
+    var ptext = document.getElementById('ocrProgressText');
+    if (prog) prog.style.display = 'flex';
+    for (var i = 0; i < total; i++) {
+        var item = queue[i];
+        window._currentBatchImgKey = 'img_' + i;
+        window._currentBatchImgDataUrl = item.dataUrl || '';
+        var before = window._ocrBatchAccum.length;
+        if (ptext) ptext.textContent = '正在识别 ' + (i + 1) + ' / ' + total;
+        await _runOneImage(item.file);
+        if (window._ocrBatchAccum.length === before) window._ocrBatchFail++;
+    }
+    window._ocrBatchMode = false;
+    if (prog) prog.style.display = 'none';
+    if (typeof resetOCREngineToDefault === 'function') resetOCREngineToDefault();
+    // 渲染完整预览表
+    showPreview(window._ocrBatchAccum, userId);
+    if (window._ocrBatchFail > 0) {
+        showToast('批量识别完成：成功 ' + window._ocrBatchAccum.length + ' 条，无结果 ' + window._ocrBatchFail + ' 张', 'info');
+    } else {
+        showToast('批量识别完成：共 ' + window._ocrBatchAccum.length + ' 条', 'success');
+    }
+    // 清空队列 UI
+    window._ocrBatchQueue = [];
+    window._ocrBatchActive = false;
+    renderBatchStrip();
+    updateReviewBtn();
+}
+
+// ==================== 逐张核对 ====================
+function openReviewOverlay() {
+    var bills = window._previewBills || [];
+    if (!bills.length) { showToast('没有可核对的账单', 'info'); return; }
+    window._reviewIdx = 0;
+    var ov = document.getElementById('reviewOverlay');
+    if (ov) ov.style.display = 'flex';
+    renderReview();
+}
+
+function renderReview() {
+    var bills = window._previewBills || [];
+    var idx = window._reviewIdx || 0;
+    if (idx >= bills.length) idx = bills.length - 1;
+    if (idx < 0) idx = 0;
+    window._reviewIdx = idx;
+    var b = bills[idx];
+    var ov = document.getElementById('reviewOverlay');
+    if (!b) { if (ov) ov.style.display = 'none'; return; }
+    var total = bills.length;
+    var verifiedCount = bills.filter(function(x) { return x._verified; }).length;
+    var idxEl = document.getElementById('rvIdx'); if (idxEl) idxEl.textContent = (idx + 1) + ' / ' + total;
+    var vcEl = document.getElementById('rvVerifiedCount'); if (vcEl) vcEl.textContent = '已核对 ' + verifiedCount + ' / ' + total;
+    var imgEl = document.getElementById('rvImg');
+    if (imgEl) {
+        if (b._srcImg) { imgEl.src = b._srcImg; imgEl.style.display = 'block'; }
+        else { imgEl.style.display = 'none'; }
+    }
+    var rawEl = document.getElementById('rvRaw'); if (rawEl) rawEl.textContent = b._srcText || '(无原文)';
+    var dEl = document.getElementById('rvDate'); if (dEl) dEl.value = b.date || '';
+    var tEl = document.getElementById('rvType'); if (tEl) tEl.value = b.type || '支出';
+    var aEl = document.getElementById('rvAmount');
+    if (aEl) {
+        var amtTxt = (b.type === '收入' ? '+' : (b.type === '结余' ? '' : '-')) + (typeof _formatAmount === 'function' ? _formatAmount(b.amount) : (b.amount || ''));
+        aEl.value = amtTxt;
+    }
+    var nEl = document.getElementById('rvNote'); if (nEl) nEl.value = b.note || '';
+    var vbtn = document.getElementById('rvVerified');
+    if (vbtn) {
+        vbtn.textContent = b._verified ? '✓ 已核对' : '○ 标记核对';
+        vbtn.className = 'btn ' + (b._verified ? 'btn-primary' : 'btn-outline');
+    }
+    var prevBtn = document.getElementById('rvPrev'); if (prevBtn) prevBtn.disabled = (idx <= 0);
+    var nextBtn = document.getElementById('rvNext'); if (nextBtn) nextBtn.disabled = (idx >= total - 1);
+}
+
+function reviewNav(dir) {
+    var total = (window._previewBills || []).length;
+    window._reviewIdx = (window._reviewIdx || 0) + dir;
+    if (window._reviewIdx < 0) window._reviewIdx = 0;
+    if (window._reviewIdx >= total) window._reviewIdx = total - 1;
+    renderReview();
+}
+
+function reviewSaveField() {
+    var bills = window._previewBills || [];
+    var b = bills[window._reviewIdx || 0];
+    if (!b) return;
+    b.date = document.getElementById('rvDate').value;
+    b.type = document.getElementById('rvType').value;
+    var amtRaw = (document.getElementById('rvAmount').value || '').replace(/[+\-\s,]/g, '');
+    var num = parseFloat(amtRaw);
+    if (!isNaN(num)) b.amount = num;
+    b.note = document.getElementById('rvNote').value;
+    // 同步刷新背后预览表（含去重/渲染）
+    showPreview(bills, window._previewUserId);
+}
+
+function toggleReviewVerified() {
+    var bills = window._previewBills || [];
+    var b = bills[window._reviewIdx || 0];
+    if (!b) return;
+    b._verified = !b._verified;
+    renderReview();
+}
+
+function closeReviewOverlay() {
+    var ov = document.getElementById('reviewOverlay');
+    if (ov) ov.style.display = 'none';
 }
 
 // ==================== 粘贴功能 ====================
@@ -4052,6 +4289,11 @@ function switchImportUser(uid) {
 
 // ==================== 预览与确认导入 ====================
 function showPreview(bills, userId) {
+    // === 批量识别模式：把结果交给批量收集器，不在此渲染预览表 ===
+    if (window._ocrBatchMode) {
+        if (window._ocrBatchSink) window._ocrBatchSink(bills, window._ocrLastText);
+        return;
+    }
     // 自动去除 OCR 字间距（中文与中文之间的空格）
     if (Array.isArray(bills)) {
         bills.forEach(function(b) {
@@ -4133,6 +4375,7 @@ function showPreview(bills, userId) {
     updateLearnInfoBar(hasLearning);
 
     document.getElementById('confirmImportBtn').disabled = false;
+    updateReviewBtn();
 }
 
 // 更新学习修正信息栏
@@ -6284,21 +6527,25 @@ function processImageOCR(file) {
     var reBtn = document.getElementById('btnReRecognize');
     if (reBtn) reBtn.classList.remove('visible');
 
-    // 显示图片预览
-    var previewDiv = document.getElementById('imagePreview');
-    var previewImg = document.getElementById('previewImage');
-    previewImg.onload = function() {
-        initBoxCanvas();
-    };
-    previewImg.src = URL.createObjectURL(file);
-    previewDiv.style.display = 'block';
+    // 显示图片预览（批量模式跳过单图调试预览）
+    if (!window._ocrBatchMode) {
+        var previewDiv = document.getElementById('imagePreview');
+        var previewImg = document.getElementById('previewImage');
+        previewImg.onload = function() {
+            initBoxCanvas();
+        };
+        previewImg.src = URL.createObjectURL(file);
+        previewDiv.style.display = 'block';
+    }
 
-    // 显示进度
+    // 显示进度（批量模式由 startBatchOCR 统一管理进度条）
     var progressDiv = document.getElementById('ocrProgress');
     var progressText = document.getElementById('ocrProgressText');
-    progressDiv.style.display = 'flex';
-    var engineLabels = { tesseract: 'Tesseract', baidu: '百度AI', tencent: '腾讯云', local: '本地模型', browser: '本地强模型' };
-    progressText.textContent = '解析识别中...';
+    if (!window._ocrBatchMode) {
+        progressDiv.style.display = 'flex';
+        var engineLabels = { tesseract: 'Tesseract', baidu: '百度AI', tencent: '腾讯云', local: '本地模型', browser: '本地强模型' };
+        progressText.textContent = '解析识别中...';
+    }
 
     // 第一关：先用温和预处理判断图片模式
     // 温和预处理（preprocessImageForTransfer）不破坏任何图片结构，
@@ -6315,7 +6562,7 @@ function processImageOCR(file) {
                 }
             }
         }).then(function(result) {
-            progressDiv.style.display = 'none';
+            if (!window._ocrBatchMode) progressDiv.style.display = 'none';
             var text = result.text;
             // 保存原始OCR文本供学习功能使用
             window._ocrLastText = text;
@@ -6335,36 +6582,43 @@ function processImageOCR(file) {
             if (mode === 'wechatBill') {
                 // 微信账单列表：Tesseract 用激进预处理重新识别，提升精度；本地模型一次识别即可
                 if (_ocrEngine === 'local') {
-                    parseOCRText(text, userId, mode);
-                    return;
+                    return parseOCRText(text, userId, mode);
                 }
                 return preprocessImage(file).then(function(processed2) {
                     var dataUrl2 = processed2.toDataURL('image/png');
-                    progressDiv.style.display = 'flex';
-                    progressText.textContent = '检测到微信账单列表，正在精细识别...';
+                    if (!window._ocrBatchMode) {
+                        progressDiv.style.display = 'flex';
+                        progressText.textContent = '检测到微信账单列表，正在精细识别...';
+                    }
                     return ocrRecognize(dataUrl2, {}).then(function(result2) {
-                        progressDiv.style.display = 'none';
+                        if (!window._ocrBatchMode) progressDiv.style.display = 'none';
                         window._ocrLastText = result2.text;
-                        parseOCRText(result2.text, userId, mode);
+                        return parseOCRText(result2.text, userId, mode);
                     });
                 });
             } else if (mode === 'wechatTransfer' || mode === 'singlePayment') {
                 // 微信转账/单笔支付：用温和预处理的结果直接解析
-                parseOCRText(text, userId, mode);
+                return parseOCRText(text, userId, mode);
             } else {
                 // 未知模式：尝试用现有解析
-                parseOCRText(text, userId, mode);
+                return parseOCRText(text, userId, mode);
             }
         }).catch(function(err) {
-            progressDiv.style.display = 'none';
+            if (!window._ocrBatchMode) progressDiv.style.display = 'none';
             showToast('OCR识别失败：' + err.message, 'error');
+            // 通知批量调度：本张图片识别失败，放行继续下一张
+            _finishBatchImage();
         }).then(function() {
-            // 识别完成后自动恢复为默认引擎 Tesseract
-            resetOCREngineToDefault();
+            // 识别完成后自动恢复为默认引擎 Tesseract（批量模式整体结束后统一恢复）
+            if (!window._ocrBatchMode) resetOCREngineToDefault();
+            // 通知批量调度：本张图片处理完成
+            _finishBatchImage();
         });
     }).catch(function(err) {
-        progressDiv.style.display = 'none';
+        if (!window._ocrBatchMode) progressDiv.style.display = 'none';
         showToast('图片处理失败：' + err.message, 'error');
+        // 通知批量调度：本张图片处理完成（失败也要放行，继续下一张）
+        _finishBatchImage();
     });
 }
 
@@ -7437,7 +7691,7 @@ function parseOCRText(text, userId, preDetectedType) {
     var manualOverride = _manualOcrType;
     _manualOcrType = '';
 
-    _OCR_LEARN.match(text).then(function(learnMatch) {
+    return _OCR_LEARN.match(text).then(function(learnMatch) {
         var learnedType = null;
         if (learnMatch && learnMatch.rule && learnMatch.rule.screenshotType) {
             learnedType = learnMatch.rule.screenshotType;
@@ -7506,7 +7760,7 @@ function parseOCRText(text, userId, preDetectedType) {
         // --- 填充调试面板 ---
         var panel = document.getElementById('ocrDebugPanel');
         if (panel) {
-            panel.style.display = 'block';
+            if (!window._ocrBatchMode) panel.style.display = 'block';
 
             var typeLabel = learnedType || detectScreenshotType(text, lines);
             var typeMap = {
@@ -7578,7 +7832,7 @@ function parseOCRText(text, userId, preDetectedType) {
 
         // ---- 学习引擎自动修正（锁定模式跳过，保护精调结果） ----
         if (bills.length > 0) {
-            _OCR_LEARN.autoCorrect(bills, text, screenshotType).then(function(result) {
+            return _OCR_LEARN.autoCorrect(bills, text, screenshotType).then(function(result) {
                 bills = result.bills;
                 // 合并预检的解析器类型信息
                 if (learnedType && !result.screenshotType) {
