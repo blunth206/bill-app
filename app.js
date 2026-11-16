@@ -3970,6 +3970,95 @@ function rvEdit(gi, field, el) {
     if (typeof recheckDuplicates === 'function') recheckDuplicates();
 }
 
+// ==================== 核对界面：补录漏识别的账单 ====================
+// 展开/收起补录表单
+function rvToggleAddRow() {
+    var form = document.getElementById('rvAddForm');
+    var btn = document.getElementById('rvAddToggle');
+    if (!form) return;
+    if (form.style.display !== 'none') {
+        form.style.display = 'none';
+        if (btn) btn.textContent = '＋ 补录一条账单（图片里有、但没识别出来的可以手动加）';
+        return;
+    }
+    // 初始化：日期默认今天、账单户默认当前账户、收支默认收入
+    var dateEl = document.getElementById('rvAddDate');
+    if (dateEl && !dateEl.value) dateEl.value = new Date().toISOString().slice(0, 10);
+    var userEl = document.getElementById('rvAddUser');
+    if (userEl) {
+        var users = (typeof APP_DATA !== 'undefined' && APP_DATA.billUsers) ? APP_DATA.billUsers : [];
+        userEl.innerHTML = '';
+        users.forEach(function (u) {
+            var o = document.createElement('option');
+            o.value = u.id;
+            o.textContent = u.name;
+            userEl.appendChild(o);
+        });
+        var g = _rvCurrentGroup();
+        var cur = (g && g.rows.length) ? _rvUserOf(g.rows[0].b).id : '';
+        if (cur && users.some(function (u) { return u.id === cur; })) userEl.value = cur;
+        else if (window._previewUserId) userEl.value = window._previewUserId;
+    }
+    var typeEl = document.getElementById('rvAddType');
+    if (typeEl) typeEl.value = '收入';
+    form.style.display = 'flex';
+    if (btn) btn.textContent = '收起补录';
+    var amtEl = document.getElementById('rvAddAmount');
+    if (amtEl) { amtEl.value = ''; amtEl.focus(); }
+}
+
+// 添加一条补录账单到当前这张图
+function rvAddManualRow() {
+    var bills = window._previewBills;
+    if (!bills) bills = window._previewBills = [];
+    var typeEl = document.getElementById('rvAddType');
+    var amtEl = document.getElementById('rvAddAmount');
+    var dateEl = document.getElementById('rvAddDate');
+    var userEl = document.getElementById('rvAddUser');
+    var noteEl = document.getElementById('rvAddNote');
+
+    var type = typeEl ? typeEl.value : '收入';
+    var amount = parseFloat(amtEl ? amtEl.value : '');
+    if (!amount || isNaN(amount)) { showToast('请填写有效金额', 'error'); return; }
+    amount = Math.abs(amount);
+    if (type !== '结余' && amount === 0) { showToast('金额不能为 0', 'error'); return; }
+    var date = (dateEl && dateEl.value) ? dateEl.value : new Date().toISOString().slice(0, 10);
+    var uid = (userEl && userEl.value) ? userEl.value : (window._previewUserId || '');
+    if (!uid) { showToast('请先选择账单户', 'error'); return; }
+    var note = noteEl ? (noteEl.value || '') : '';
+
+    var bill = {
+        date: date,
+        type: type,
+        amount: amount,
+        note: note,
+        userId: uid,
+        source: '手动补录',
+        createdAt: Date.now(),
+        updatedAt: new Date().toISOString()
+    };
+    // 归属当前这张图，和其它识别结果一起核对/导入
+    var g = _rvCurrentGroup();
+    if (g) {
+        bill._batchImgKey = g.key;
+        bill._srcImg = g.img;
+        var raw = _rvGroupRawText(g);
+        if (raw) bill._srcText = raw;
+    }
+    bills.push(bill);
+
+    // 收起表单 + 刷新核对列表与背后预览
+    var form = document.getElementById('rvAddForm');
+    if (form) form.style.display = 'none';
+    var btn = document.getElementById('rvAddToggle');
+    if (btn) btn.textContent = '＋ 补录一条账单（图片里有、但没识别出来的可以手动加）';
+    if (noteEl) noteEl.value = '';
+
+    renderReview();
+    if (typeof showPreview === 'function') showPreview(bills, window._previewUserId);
+    showToast('已补录 1 条' + type + '（' + amount.toFixed(2) + '）', 'success');
+}
+
 // ==================== 核对界面：复制图片文本 ====================
 // 取当前正在核对的那张图
 function _rvCurrentGroup() {
@@ -5885,7 +5974,7 @@ function confirmImport() {
             type: b.type || '支出',
             amount: b.amount || 0,
             note: b.note || '',
-            source: '导入',
+            source: b.source === '手动补录' ? '手动补录' : '导入',
             createdAt: Date.now(),
             updatedAt: new Date().toISOString()
         };

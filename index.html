@@ -11,7 +11,7 @@
     <link rel="manifest" href="manifest.json">
     <link rel="icon" type="image/png" href="favicon-32.png">
     <link rel="apple-touch-icon" href="apple-touch-icon.png">
-    <link rel="stylesheet" href="style.css?v=39">
+    <link rel="stylesheet" href="style.css?v=40">
     <!-- CDN 库异步加载，不阻塞页面渲染 -->
     <script>
     (function loadCdnLibs() {
@@ -862,6 +862,20 @@ async function handleRequest(request) {
                         </span>
                     </div>
                     <div class="rv-rows" id="rvRows"></div>
+                    <!-- 漏识别的账单可以在这里手动补录 -->
+                    <div class="rv-add-wrap">
+                        <button class="rv-add-toggle" id="rvAddToggle" onclick="rvToggleAddRow()">＋ 补录一条账单（图片里有、但没识别出来的可以手动加）</button>
+                        <div class="rv-add-form" id="rvAddForm" style="display:none;">
+                            <select class="rv-in" id="rvAddType"><option value="收入">收入</option><option value="支出">支出</option><option value="结余">结余</option></select>
+                            <input class="rv-in" id="rvAddAmount" type="text" inputmode="decimal" placeholder="金额">
+                            <input class="rv-in" id="rvAddDate" type="date">
+                            <select class="rv-in" id="rvAddUser"></select>
+                            <input class="rv-in rv-add-note" id="rvAddNote" type="text" placeholder="备注">
+                            <button class="rv-add-ok" onclick="rvAddManualRow()">添加</button>
+                            <button class="rv-add-cancel" onclick="rvToggleAddRow()">取消</button>
+                        </div>
+                        <p class="rv-add-tip">补录的这条会计入当前这张图，和其它识别结果一起导入。</p>
+                    </div>
                 </div>
             </div>
             <div class="review-foot">
@@ -1195,7 +1209,7 @@ async function handleRequest(request) {
     <!-- Toast 提示 -->
     <div class="toast" id="toast"></div>
 
-    <script src="app.js?v=66"></script>
+    <script src="app.js?v=67"></script>
     <script>
     (function(){
         function showForgot(){
