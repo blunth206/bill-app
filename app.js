@@ -3669,19 +3669,33 @@ function openReviewOverlay() {
     renderReview();
 }
 
+// 取某条账单当前生效的账单户（优先账单自带 userId，否则用本次导入的目标账单户）
+function _rvUserOf(b) {
+    var uid = (b && b.userId) || window._previewUserId || '';
+    var list = (typeof APP_DATA !== 'undefined' && APP_DATA.billUsers) ? APP_DATA.billUsers : [];
+    for (var i = 0; i < list.length; i++) {
+        if (list[i].id === uid) {
+            return { id: list[i].id, name: list[i].name, color: list[i].color || '#999' };
+        }
+    }
+    if (uid) return { id: uid, name: '未知账单户', color: '#999' };
+    return { id: '', name: '未选账单户', color: '#999' };
+}
+
 // 单行 HTML：日期 / 账单户 / 收支 / 金额 / 备注（全部可改）
 function _rvRowHtml(b, gi) {
     var type = b.type || '支出';
     var cls = type === '收入' ? 'inc' : (type === '结余' ? 'bal' : 'exp');
     var sign = (typeof _amountSignOf === 'function') ? _amountSignOf(type) : (type === '收入' ? '+' : '-');
-    var userName = (typeof _billUserName === 'function' && window._previewUserId) ? _billUserName(window._previewUserId) : '未选账单户';
+    var u = _rvUserOf(b);
     var opts = '';
     ['支出', '收入', '结余'].forEach(function(t) {
         opts += '<option value="' + t + '"' + (type === t ? ' selected' : '') + '>' + t + '</option>';
     });
     return '<div class="rv-row' + (b._verified ? ' verified' : '') + '" data-gi="' + gi + '">' +
         '<input class="rv-in rv-date" type="date" value="' + (b.date || '') + '" onchange="rvEdit(' + gi + ',\'date\',this)" onkeydown="rvEnterNext(event,this)">' +
-        '<span class="rv-user-badge">' + _escAttr(userName) + '</span>' +
+        '<span class="rv-user-badge" style="background:' + u.color + ';" title="点击更改这一条的账户号" onclick="rvPickUser(' + gi + ', this)">' +
+            '<span class="rv-user-txt">' + _escAttr(u.name) + '</span><i class="rv-user-pen">✎</i></span>' +
         '<select class="rv-in rv-type" onchange="rvEdit(' + gi + ',\'type\',this)">' + opts + '</select>' +
         '<input class="rv-in rv-amount ' + cls + '" type="text" inputmode="decimal" value="' + sign + _formatAmount(b.amount) + '" onchange="rvEdit(' + gi + ',\'amount\',this)" onkeydown="rvEnterNext(event,this)">' +
         '<input class="rv-in rv-note" type="text" value="' + _escAttr(b.note || '') + '" onchange="rvEdit(' + gi + ',\'note\',this)" onkeydown="rvEnterNext(event,this)">' +
@@ -3797,6 +3811,149 @@ function rvEdit(gi, field, el) {
     if (typeof recheckDuplicates === 'function') recheckDuplicates();
 }
 
+// ==================== 核对界面：更改账户号 ====================
+// 说明：这里的改动只作用于「逐张核对」里的识别结果（window._previewBills），
+//       不会去动已经入库的账单；导入时每条账单按自己的 userId 归属。
+
+// 关闭弹出的账单户小菜单
+function _rvCloseUserPopup() {
+    var pop = document.getElementById('rvUserPopup');
+    if (pop) pop.remove();
+    if (window._rvPopupCloser) {
+        document.removeEventListener('pointerdown', window._rvPopupCloser, true);
+        window._rvPopupCloser = null;
+    }
+}
+
+// 单条更改：点行内账户徽章 → 弹出账单户列表
+function rvPickUser(gi, el) {
+    _rvCloseUserPopup();
+    var bills = window._previewBills || [];
+    if (!bills[gi]) return;
+    var users = (typeof APP_DATA !== 'undefined' && APP_DATA.billUsers) ? APP_DATA.billUsers : [];
+    if (!users.length) { showToast('还没有账单户，请先到设置里添加', 'info'); return; }
+
+    var html = '<div class="rv-user-popup-title">把这一条改为</div>';
+    users.forEach(function (u) {
+        html += '<button class="rv-user-item" onclick="rvApplyUser(' + gi + ',\'' + u.id + '\')">' +
+            '<i class="rv-user-dot" style="background:' + (u.color || '#999') + '"></i>' +
+            '<span class="rv-user-item-txt">' + _escAttr(u.name) + '</span></button>';
+    });
+
+    var pop = document.createElement('div');
+    pop.id = 'rvUserPopup';
+    pop.className = 'rv-user-popup';
+    pop.innerHTML = html;
+    pop.style.position = 'fixed';
+    pop.style.left = '0px';
+    pop.style.top = '0px';
+    document.body.appendChild(pop);
+
+    var r = el.getBoundingClientRect();
+    var pw = pop.offsetWidth, ph = pop.offsetHeight;
+    var left = r.left;
+    if (left + pw > window.innerWidth - 8) left = window.innerWidth - pw - 8;
+    if (left < 8) left = 8;
+    var top = r.bottom + 6;
+    if (top + ph > window.innerHeight - 8) top = Math.max(8, r.top - ph - 6);
+    pop.style.left = left + 'px';
+    pop.style.top = top + 'px';
+
+    setTimeout(function () {
+        var closer = function (ev) {
+            if (pop && pop.contains(ev.target)) return;
+            _rvCloseUserPopup();
+        };
+        window._rvPopupCloser = closer;
+        document.addEventListener('pointerdown', closer, true);
+    }, 0);
+}
+
+// 应用单条账户号更改
+function rvApplyUser(gi, uid) {
+    var bills = window._previewBills || [];
+    var b = bills[gi];
+    if (!b) return;
+    b.userId = uid;
+    _rvCloseUserPopup();
+    renderReview();
+    if (typeof showPreview === 'function') showPreview(bills, window._previewUserId);
+    showToast('这一条已改为【' + _billUserName(uid) + '】', 'success');
+}
+
+// 打开「批量更改账户号」弹窗
+function rvOpenBatchUserModal() {
+    var bills = window._previewBills || [];
+    if (!bills.length) { showToast('没有可更改的账单', 'info'); return; }
+    var groups = (window._reviewGroups && window._reviewGroups.length) ? window._reviewGroups : buildReviewGroups();
+    var g = groups[window._reviewIdx || 0];
+    var pageCount = g ? g.rows.length : 0;
+    var allCount = bills.length;
+
+    var elPage = document.getElementById('rvScopePage');
+    var elAll = document.getElementById('rvScopeAll');
+    if (elPage && elAll) {
+        if (pageCount > 0 && pageCount === allCount) { elPage.checked = true; elAll.checked = false; }
+        else { elPage.checked = false; elAll.checked = true; }
+    }
+    var c1 = document.getElementById('rvScopePageCount'); if (c1) c1.textContent = pageCount;
+    var c2 = document.getElementById('rvScopeAllCount'); if (c2) c2.textContent = allCount;
+
+    var sel = document.getElementById('rvBatchUserSelect');
+    if (sel) {
+        var users = (typeof APP_DATA !== 'undefined' && APP_DATA.billUsers) ? APP_DATA.billUsers : [];
+        sel.innerHTML = '';
+        users.forEach(function (u) {
+            var o = document.createElement('option');
+            o.value = u.id;
+            o.textContent = u.name;
+            sel.appendChild(o);
+        });
+        var cur = (g && g.rows.length) ? _rvUserOf(g.rows[0].b).id : '';
+        if (cur && users.some(function (u) { return u.id === cur; })) sel.value = cur;
+        else if (window._previewUserId) sel.value = window._previewUserId;
+    }
+    var hint = document.getElementById('rvBatchUserHint');
+    if (hint) hint.textContent = '只改核对界面里的识别结果，不会动已入库的账单。';
+    openModal('rvBatchUserModal');
+}
+
+function closeRvBatchUserModal() {
+    closeModal('rvBatchUserModal');
+}
+
+// 应用批量更改（范围：本页 / 导入的所有账单）
+function rvApplyBatchUser() {
+    var bills = window._previewBills || [];
+    if (!bills.length) { closeRvBatchUserModal(); return; }
+    var sel = document.getElementById('rvBatchUserSelect');
+    var uid = sel ? sel.value : '';
+    if (!uid) { showToast('请选择要改成的账单户', 'error'); return; }
+
+    var elAll = document.getElementById('rvScopeAll');
+    var scope = (elAll && elAll.checked) ? 'all' : 'page';
+
+    var groups = (window._reviewGroups && window._reviewGroups.length) ? window._reviewGroups : buildReviewGroups();
+    var g = groups[window._reviewIdx || 0];
+    var targets = [];
+    if (scope === 'all') {
+        bills.forEach(function (b) { targets.push(b); });
+        // 整批都归到这个账单户 → 同步导入目标
+        window._previewUserId = uid;
+        var impSel = document.getElementById('importUser');
+        if (impSel) impSel.value = uid;
+    } else {
+        if (!g || !g.rows.length) { showToast('当前这张图没有账单', 'info'); return; }
+        g.rows.forEach(function (it) { if (it.b) targets.push(it.b); });
+    }
+    targets.forEach(function (b) { b.userId = uid; });
+
+    closeRvBatchUserModal();
+    renderReview();
+    if (typeof showPreview === 'function') showPreview(bills, window._previewUserId);
+    showToast('已把 ' + targets.length + ' 条改为【' + _billUserName(uid) + '】', 'success');
+}
+
 // 删除识别错误的一行
 function rvDeleteRow(gi) {
     var bills = window._previewBills || [];
@@ -3863,6 +4020,7 @@ function closeReviewOverlay() {
     var ov = document.getElementById('reviewOverlay');
     if (ov) ov.style.display = 'none';
     window._rvZoom = false;
+    _rvCloseUserPopup();
     // 核对过程中的修改同步回背后预览表（含重复检测）
     if (window._previewBills && window._previewBills.length) {
         showPreview(window._previewBills, window._previewUserId);
@@ -4445,6 +4603,32 @@ function checkDuplicates(bills, userId) {
     });
 }
 
+// 支持「一条账单一个账单户」的重复检测：按账单户分组，各组内部检测后按原顺序合并
+// （核对界面里可以给单条/某张图改账户号，重复检测要跟着账户走）
+function _checkDuplicatesMixed(bills, userId) {
+    if (!bills || !bills.length) return [];
+    var needGroup = false;
+    for (var i = 0; i < bills.length; i++) {
+        if (bills[i] && bills[i].userId && bills[i].userId !== (userId || '')) { needGroup = true; break; }
+    }
+    if (!needGroup) return checkDuplicates(bills, userId);
+
+    var groups = {}, order = [];
+    bills.forEach(function (b, idx) {
+        var uid = (b && b.userId) || userId || '';
+        if (!groups[uid]) { groups[uid] = []; order.push(uid); }
+        groups[uid].push({ b: b, i: idx });
+    });
+    var res = new Array(bills.length);
+    order.forEach(function (uid) {
+        var g = groups[uid];
+        var sub = g.map(function (x) { return x.b; });
+        var dr = checkDuplicates(sub, uid);
+        g.forEach(function (x, k) { res[x.i] = dr[k]; });
+    });
+    return res;
+}
+
 // 账单户名称
 function _billUserName(uid) {
     if (!uid) return '';
@@ -4567,7 +4751,7 @@ function showPreview(bills, userId) {
     if (!userId) { _blinkImportUser(); } else { _stopImportUserBlink(); }
 
     // 检测重复
-    var dupResults = checkDuplicates(bills, userId);
+    var dupResults = _checkDuplicatesMixed(bills, userId);
     window._dupResults = dupResults;
     var dupCount = dupResults.filter(function(d) { return d.isDuplicate; }).length;
     var exactDupCount = dupResults.filter(function(d) { return d.isDuplicate && d.noteMatch; }).length;
@@ -4756,7 +4940,7 @@ function initLearningPanel() {
 
 function recheckDuplicates() {
     if (!window._previewBills || !window._previewUserId) return;
-    var results = checkDuplicates(window._previewBills, window._previewUserId);
+    var results = _checkDuplicatesMixed(window._previewBills, window._previewUserId);
     window._dupResults = results;
     
     // 应用用户手动判定覆盖（重新计算时不覆盖用户决定）
@@ -5392,7 +5576,7 @@ function confirmImport() {
 
     // 关键修复：用最终确定的账单户重新检测重复。
     // 预览时若还没选账单户（userId 为空），那时的检测结果不可靠，必须重算。
-    var dupResults = checkDuplicates(bills, userId);
+    var dupResults = _checkDuplicatesMixed(bills, userId);
     if (window._dupOverrides) {
         Object.keys(window._dupOverrides).forEach(function(k) {
             var i = parseInt(k, 10);
@@ -5435,7 +5619,7 @@ function confirmImport() {
         }
         var newBill = {
             id: generateId('bill'),
-            userId: userId,
+            userId: b.userId || userId,
             date: b.date,
             type: b.type || '支出',
             amount: b.amount || 0,

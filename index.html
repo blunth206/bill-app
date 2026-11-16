@@ -11,7 +11,7 @@
     <link rel="manifest" href="manifest.json">
     <link rel="icon" type="image/png" href="favicon-32.png">
     <link rel="apple-touch-icon" href="apple-touch-icon.png">
-    <link rel="stylesheet" href="style.css?v=35">
+    <link rel="stylesheet" href="style.css?v=36">
     <!-- CDN 库异步加载，不阻塞页面渲染 -->
     <script>
     (function loadCdnLibs() {
@@ -822,7 +822,10 @@ async function handleRequest(request) {
                 <div class="review-right">
                     <div class="review-cap review-cap-split">
                         <span>识别结果 <b id="rvRowCount">0</b> 条 · 可直接修改</span>
-                        <button class="rv-verify-btn" id="rvVerifyBtn" onclick="rvToggleVerified()" title="标记本张已核对，并自动进入下一张">○ 本张已核对 →</button>
+                        <span class="rv-cap-actions">
+                            <button class="rv-user-btn" id="rvBatchUserBtn" onclick="rvOpenBatchUserModal()" title="批量更改账户号：可只改本页这张图，也可改导入的所有账单">👥 批量更改账户号</button>
+                            <button class="rv-verify-btn" id="rvVerifyBtn" onclick="rvToggleVerified()" title="标记本张已核对，并自动进入下一张">○ 本张已核对 →</button>
+                        </span>
                     </div>
                     <div class="rv-rows" id="rvRows"></div>
                 </div>
@@ -837,6 +840,32 @@ async function handleRequest(request) {
                     <button class="btn btn-outline" onclick="closeReviewOverlay()">关闭</button>
                     <button class="btn btn-primary" onclick="closeReviewOverlay()">核对完毕，去导入</button>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 批量更改账户号弹窗（只在逐张核对界面使用） -->
+    <div class="modal-overlay" id="rvBatchUserModal" style="z-index:1300;">
+        <div class="modal modal-sm">
+            <div class="modal-header">
+                <h3>👥 批量更改账户号</h3>
+                <button class="btn-close" onclick="closeRvBatchUserModal()">✕</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>更改范围：</label>
+                    <label class="rv-scope-opt"><input type="radio" name="rvUserScope" id="rvScopePage" value="page"> 本页（这张图）<b id="rvScopePageCount">0</b> 条</label>
+                    <label class="rv-scope-opt"><input type="radio" name="rvUserScope" id="rvScopeAll" value="all"> 导入的所有账单 <b id="rvScopeAllCount">0</b> 条</label>
+                </div>
+                <div class="form-group">
+                    <label>改为账单户：</label>
+                    <select id="rvBatchUserSelect"></select>
+                </div>
+                <div class="rv-batch-hint" id="rvBatchUserHint"></div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-outline" onclick="closeRvBatchUserModal()">取消</button>
+                <button class="btn btn-primary" onclick="rvApplyBatchUser()">确定更改</button>
             </div>
         </div>
     </div>
@@ -1132,7 +1161,7 @@ async function handleRequest(request) {
     <!-- Toast 提示 -->
     <div class="toast" id="toast"></div>
 
-    <script src="app.js?v=61"></script>
+    <script src="app.js?v=62"></script>
     <script>
     (function(){
         function showForgot(){
