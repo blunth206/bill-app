@@ -3271,6 +3271,8 @@ function openImportModal() {
     if (typeof updateOCREngineBadge === 'function') updateOCREngineBadge();
     // 加载框选模板
     if (typeof loadBoxTemplates === 'function') loadBoxTemplates();
+    // 恢复上次的「未识别成功」清单（关掉弹窗再打开仍能看到）
+    if (typeof renderBatchFailPanel === 'function') renderBatchFailPanel();
     openModal('importModal');
 }
 
@@ -3571,19 +3573,24 @@ function _runOneImage(file, key, img) {
     });
 }
 
-async function startBatchOCR() {
+// 批量识别：append=true 时不清空已有结果，只把新识别的追加进来（用于重试失败的几张）
+async function startBatchOCR(append) {
     var queue = window._ocrBatchQueue || [];
     if (!queue.length) { showToast('队列为空，请先添加图片', 'info'); return; }
     var userId = document.getElementById('importUser').value;
     if (!userId) { _blinkImportUser(); return; }
-    // 清空上一次预览
-    window._previewBills = [];
-    window._dupResults = [];
-    window._ocrBatchAccum = [];
+    // 清空上一次预览（追加模式保留）
+    if (!append) {
+        window._previewBills = [];
+        window._dupResults = [];
+        window._ocrBatchAccum = [];
+        window._ocrBatchFailItems = [];
+        window._rvVerified = {};   // 新一批 = 新的核对进度
+    }
     window._ocrBatchFail = 0;
     window._ocrBatchFailKeys = [];
-    window._rvVerified = {};   // 新一批 = 新的核对进度
     var total = queue.length;
+    var baseKey = append ? ('img_r' + Date.now()) : '';
     window._ocrBatchMode = true;
     window._ocrBatchSink = _ocrBatchSinkFn;
     var prog = document.getElementById('ocrProgress');
@@ -3591,16 +3598,26 @@ async function startBatchOCR() {
     if (prog) prog.style.display = 'flex';
     for (var i = 0; i < total; i++) {
         var item = queue[i];
-        var key = 'img_' + i;
+        var key = baseKey ? (baseKey + '_' + i) : ('img_' + i);
         var before = window._ocrBatchAccum.length;
-        if (ptext) {
-            ptext.textContent = '正在识别 ' + (i + 1) + ' / ' + total
-                + ((i === 0 && _ocrEngine === 'browser') ? '（首次加载模型较慢）' : '');
+        updateBatchProgressUI(i, total, item, i, window._ocrBatchAccum.length);
+        if (i === 0 && _ocrEngine === 'browser') {
+            var engEl = document.getElementById('ocrBatchProgEngine');
+            if (engEl) engEl.textContent = '首次加载本地模型，较慢属正常…';
         }
         await _runOneImage(item.file, key, item.dataUrl || '');
         if (window._ocrBatchAccum.length === before) {
+            // 这张图没识别出账单 → 记录明细，结束后告诉用户是哪几张
             window._ocrBatchFail++;
             window._ocrBatchFailKeys.push(i + 1);
+            window._ocrBatchFailItems = window._ocrBatchFailItems || [];
+            window._ocrBatchFailItems.push({
+                no: item.no || (i + 1),
+                name: item.name || ('第 ' + (i + 1) + ' 张'),
+                dataUrl: item.dataUrl || '',
+                thumbUrl: item.thumbUrl || item.dataUrl || '',
+                file: item.file
+            });
         }
     }
     window._ocrBatchMode = false;
@@ -3612,11 +3629,18 @@ async function startBatchOCR() {
     if (typeof resetOCREngineToDefault === 'function') resetOCREngineToDefault();
     // 渲染完整预览表
     showPreview(window._ocrBatchAccum, userId);
+    // 统计识别成功的图片张数（按分组 key 去重）
+    var okKeys = {};
+    (window._ocrBatchAccum || []).forEach(function (b) { if (b && b._batchImgKey) okKeys[b._batchImgKey] = 1; });
+    var okImgs = Object.keys(okKeys).length;
+    window._ocrBatchOkImgs = okImgs;
+    window._ocrBatchTotalImgs = total;
+    renderBatchFailPanel();
     if (window._ocrBatchFail > 0) {
-        showToast('批量识别完成：成功 ' + window._ocrBatchAccum.length + ' 条，无结果 ' + window._ocrBatchFail + ' 张（第 '
-            + (window._ocrBatchFailKeys || []).join('、') + ' 张）', 'info');
+        showToast((append ? '重试完成' : '批量识别完成') + '：共 ' + total + ' 张，识别成功 ' + okImgs
+            + ' 张，' + window._ocrBatchFail + ' 张没识别出账单（见下方失败清单，可单独重识别）', 'info');
     } else {
-        showToast('批量识别完成：共 ' + window._ocrBatchAccum.length + ' 条', 'success');
+        showToast((append ? '重试完成' : '批量识别完成') + '：共 ' + total + ' 张，全部识别成功（' + window._ocrBatchAccum.length + ' 条）', 'success');
     }
     // 清空队列 UI（开关状态保持不变，方便继续添加）
     window._ocrBatchQueue = [];
@@ -3624,8 +3648,117 @@ async function startBatchOCR() {
     updateReviewBtn();
     // 批量识别完成后直接进入逐张核对
     if (window._ocrBatchAccum.length) {
-        setTimeout(function() { openReviewOverlay(); }, 300);
+        setTimeout(function () { openReviewOverlay(); }, 300);
     }
+}
+
+// ==================== 批量识别进度 ====================
+// 设置识别进度文案：批量模式下不覆盖「第 X 张 / 共 N 张」的主文案，引擎提示放到副信息里
+function _setOcrProgressText(text) {
+    var el = document.getElementById('ocrProgressText');
+    if (!el) return;
+    if (window._ocrBatchMode) {
+        var sub = document.getElementById('ocrBatchProgEngine');
+        if (sub) sub.textContent = text || '';
+        return;
+    }
+    el.textContent = text;
+}
+
+// 刷新批量识别进度面板：当前第几张、当前图缩略图、进度条、已识别条数
+function updateBatchProgressUI(idx, total, item, doneCount, billCount) {
+    var box = document.getElementById('ocrBatchProgress');
+    if (!box) return;
+    box.style.display = 'block';
+    var title = '正在识别第 ' + (idx + 1) + ' 张 / 共 ' + total + ' 张';
+    var t = document.getElementById('ocrBatchProgTitle');
+    if (t) t.textContent = title;
+    var p = document.getElementById('ocrProgressText');
+    if (p) p.textContent = title;
+    var n = document.getElementById('ocrBatchProgName');
+    if (n) n.textContent = (item && item.name) ? item.name : '';
+    var th = document.getElementById('ocrBatchProgThumb');
+    if (th) th.src = (item && (item.thumbUrl || item.dataUrl)) || '';
+    var bar = document.getElementById('ocrBatchProgBar');
+    if (bar) bar.style.width = Math.max(2, Math.round((idx / total) * 100)) + '%';
+    var st = document.getElementById('ocrBatchProgStat');
+    if (st) st.textContent = '已完成 ' + doneCount + ' 张 · 已识别 ' + billCount + ' 条账单';
+}
+
+// ==================== 批量识别失败清单 ====================
+// 渲染「哪几张没识别出账单」的清单（带缩略图，可单独重试）
+function renderBatchFailPanel() {
+    var panel = document.getElementById('ocrBatchFailPanel');
+    var strip = document.getElementById('ocrBatchFailStrip');
+    if (!panel) return;
+    var items = window._ocrBatchFailItems || [];
+    if (!items.length) { panel.style.display = 'none'; return; }
+    panel.style.display = 'block';
+
+    var cEl = document.getElementById('ocrFailCount');
+    if (cEl) cEl.textContent = items.length;
+    var tEl = document.getElementById('ocrFailTotal');
+    if (tEl) tEl.textContent = window._ocrBatchTotalImgs || 0;
+    var okEl = document.getElementById('ocrFailOk');
+    if (okEl) okEl.textContent = window._ocrBatchOkImgs || 0;
+    var rcEl = document.getElementById('ocrFailRetryCount');
+    if (rcEl) rcEl.textContent = items.length;
+    if (!strip) return;
+
+    var html = '';
+    items.forEach(function (it, i) {
+        html += '<div style="position:relative;width:76px;border:1px solid #fca5a5;border-radius:8px;overflow:hidden;background:#fff;">'
+            + '<img src="' + it.thumbUrl + '" title="' + escapeHtml(it.name) + '" style="width:76px;height:76px;object-fit:cover;display:block;" alt="">'
+            + '<div style="position:absolute;left:0;right:0;bottom:0;background:rgba(0,0,0,.62);color:#fff;font-size:10px;line-height:1.5;padding:2px 3px;text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">第 ' + it.no + ' 张</div>'
+            + '<button onclick="retryOneFailedBatchImage(' + i + ')" title="只重新识别这一张" style="position:absolute;top:2px;left:2px;padding:1px 4px;border:none;border-radius:4px;background:rgba(47,128,237,.92);color:#fff;cursor:pointer;font-size:10px;">🎯</button>'
+            + '<button onclick="removeFailedBatchImage(' + i + ')" title="这张确实没有账单，忽略它" style="position:absolute;top:2px;right:2px;width:18px;height:18px;line-height:16px;padding:0;border:none;border-radius:50%;background:rgba(0,0,0,.55);color:#fff;cursor:pointer;font-size:12px;">✕</button>'
+            + '</div>';
+    });
+    strip.innerHTML = html;
+}
+
+// 重试所有失败图片（结果追加到已识别账单里）
+function retryFailedBatchImages() {
+    var items = window._ocrBatchFailItems || [];
+    if (!items.length) { showToast('没有需要重试的图片', 'info'); return; }
+    var userId = document.getElementById('importUser').value;
+    if (!userId) { _blinkImportUser(); return; }
+    window._ocrBatchFailItems = [];
+    window._ocrBatchQueue = items.map(function (it) {
+        return { file: it.file, name: it.name, dataUrl: it.dataUrl, thumbUrl: it.thumbUrl, no: it.no };
+    });
+    renderBatchStrip();
+    startBatchOCR(true);
+}
+
+// 只重识别一张
+function retryOneFailedBatchImage(i) {
+    var items = window._ocrBatchFailItems || [];
+    var it = items[i];
+    if (!it) return;
+    var userId = document.getElementById('importUser').value;
+    if (!userId) { _blinkImportUser(); return; }
+    items.splice(i, 1);
+    window._ocrBatchFailItems = items;
+    window._ocrBatchQueue = [{ file: it.file, name: it.name, dataUrl: it.dataUrl, thumbUrl: it.thumbUrl, no: it.no }];
+    renderBatchStrip();
+    startBatchOCR(true);
+}
+
+// 忽略某张失败图片（确认它本来就没有账单）
+function removeFailedBatchImage(i) {
+    var items = window._ocrBatchFailItems || [];
+    if (!items[i]) return;
+    items.splice(i, 1);
+    window._ocrBatchFailItems = items;
+    renderBatchFailPanel();
+}
+
+// 忽略全部失败图片
+function clearFailedBatchImages() {
+    window._ocrBatchFailItems = [];
+    renderBatchFailPanel();
+    showToast('已忽略这些图片', 'info');
 }
 
 // ==================== 逐张核对（左=原图，右=该图的识别结果） ====================
@@ -3769,6 +3902,28 @@ function renderReview() {
     // 顶部同款翻页按钮
     var prevTop = document.getElementById('rvPrevTop'); if (prevTop) prevTop.disabled = (gi <= 0);
     var nextTop = document.getElementById('rvNextTop'); if (nextTop) nextTop.disabled = (gi >= total - 1);
+
+    // 未识别成功的图片提示条
+    var failBar = document.getElementById('rvFailBar');
+    if (failBar) {
+        var fc = (window._ocrBatchFailItems || []).length;
+        failBar.style.display = fc ? 'flex' : 'none';
+        var fnEl = document.getElementById('rvFailNum');
+        if (fnEl) fnEl.textContent = fc;
+    }
+}
+
+// 从核对浮层跳回导入弹窗的「未识别清单」
+function rvShowFailPanel() {
+    closeReviewOverlay();
+    var modal = document.getElementById('importModal');
+    if (modal && !modal.classList.contains('active')) openModal('importModal');
+    setTimeout(function () {
+        var p = document.getElementById('ocrBatchFailPanel');
+        if (p) {
+            try { p.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (e) { try { p.scrollIntoView(); } catch (e2) {} }
+        }
+    }, 150);
 }
 
 function reviewNav(dir) {
@@ -6954,8 +7109,7 @@ var OCR_MODEL_TOTAL_MB = 30.5;
 
 // 模型下载进度：有进度条就用进度条，否则用 toast
 function _ocrModelProgress(text) {
-    var el = document.getElementById('ocrProgressText');
-    if (el) el.textContent = text;
+    _setOcrProgressText(text);
     showToast(text, 'info', 3000);
 }
 
@@ -7120,8 +7274,7 @@ function ocrBrowser(imageDataUrl) {
         p.catch(function () { if (_browserOcrInit === p) _browserOcrInit = null; });
     }
     return _browserOcrInit.then(function(mod) {
-        var el = document.getElementById('ocrProgressText');
-        if (el) el.textContent = '模型已就绪，正在识别...';
+        _setOcrProgressText('模型已就绪，正在识别...');
         var img = new Image();
         img.src = imageDataUrl;
         return img.decode().then(function() {
@@ -7201,7 +7354,7 @@ function reRecognize() {
     updateOCREngineBadge();
 
     progressDiv.style.display = 'flex';
-    progressText.textContent = '解析识别中...';
+    _setOcrProgressText('解析识别中...');
 
     // 隐藏重新识别按钮
     var reBtn = document.getElementById('btnReRecognize');
@@ -7218,11 +7371,11 @@ function reRecognize() {
             logger: function(info) {
                 if (info.status === 'recognizing text') {
                     var pct = Math.round(info.progress * 100);
-                    progressText.textContent = '正在识别... ' + pct + '%';
+                    _setOcrProgressText('正在识别... ' + pct + '%');
                 }
             }
         }).then(function(result) {
-            progressDiv.style.display = 'none';
+            if (!window._ocrBatchMode) progressDiv.style.display = 'none';
             window._ocrLastText = result.text;
             parseOCRText(result.text, userId);
         }).catch(function(err) {
@@ -7308,7 +7461,7 @@ function processImageOCR(file) {
             logger: function(info) {
                 if (info.status === 'recognizing text') {
                     var pct = Math.round(info.progress * 100);
-                    progressText.textContent = '正在识别... ' + pct + '%';
+                    _setOcrProgressText('正在识别... ' + pct + '%');
                 }
             }
         }).then(function(result) {

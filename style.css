@@ -1649,6 +1649,53 @@ body {
     animation: spin 0.8s linear infinite;
 }
 
+/* 批量识别进度面板：当前第几张 + 当前图缩略图 + 进度条 */
+.ocr-batch-prog {
+    width: 100%;
+    max-width: 460px;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    padding: 12px 14px;
+    box-sizing: border-box;
+}
+.ocr-batch-prog-row { display: flex; align-items: center; gap: 12px; }
+.ocr-batch-prog-thumb {
+    width: 56px;
+    height: 56px;
+    border-radius: 8px;
+    border: 1px solid #cbd5e1;
+    object-fit: cover;
+    background: #fff;
+    flex: 0 0 auto;
+}
+.ocr-batch-prog-info { flex: 1 1 auto; min-width: 0; text-align: left; }
+.ocr-batch-prog-title { font-size: 14px; font-weight: 700; color: #1e293b; }
+.ocr-batch-prog-name {
+    font-size: 12px;
+    color: #64748b;
+    margin-top: 2px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.ocr-batch-prog-engine { font-size: 11px; color: #2F80ED; margin-top: 2px; min-height: 14px; }
+.ocr-batch-prog-bar {
+    margin-top: 10px;
+    height: 8px;
+    border-radius: 999px;
+    background: #e2e8f0;
+    overflow: hidden;
+}
+.ocr-batch-prog-bar-in {
+    height: 100%;
+    width: 2%;
+    border-radius: 999px;
+    background: linear-gradient(90deg, #2F80ED, #56CCF2);
+    transition: width .25s ease;
+}
+.ocr-batch-prog-stat { margin-top: 6px; font-size: 12px; color: #64748b; text-align: left; }
+
 @keyframes spin {
     to { transform: rotate(360deg); }
 }
@@ -3143,6 +3190,22 @@ div[id*="eop-banner"],
 }
 
 .review-subbar-hint { font-size: 12px; color: #94a3b8; }
+
+/* 核对浮层顶部的「未识别成功」提示条 */
+.review-fail-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    flex-wrap: wrap;
+    padding: 8px 20px;
+    background: #fef2f2;
+    border-bottom: 1px solid #fecaca;
+    color: #b91c1c;
+    font-size: 13px;
+    flex: 0 0 auto;
+}
+.review-fail-bar b { color: #dc2626; }
 
 .review-body {
     display: flex;

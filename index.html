@@ -11,7 +11,7 @@
     <link rel="manifest" href="manifest.json">
     <link rel="icon" type="image/png" href="favicon-32.png">
     <link rel="apple-touch-icon" href="apple-touch-icon.png">
-    <link rel="stylesheet" href="style.css?v=38">
+    <link rel="stylesheet" href="style.css?v=39">
     <!-- CDN 库异步加载，不阻塞页面渲染 -->
     <script>
     (function loadCdnLibs() {
@@ -580,6 +580,18 @@ async function handleRequest(request) {
                         <div class="ocr-batch-strip" id="ocrBatchStrip" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px;"></div>
                         <button class="btn btn-primary" id="btnStartBatch" onclick="startBatchOCR()" style="width:100%;">🔍 开始批量识别（<span id="batchCount2">0</span>）</button>
                     </div>
+                    <!-- 批量识别失败清单：明确告诉用户哪几张没识别出来，可单独或批量重试 -->
+                    <div class="ocr-batch-fail" id="ocrBatchFailPanel" style="display:none;margin-top:10px;padding:10px;border:1px solid #fecaca;border-radius:10px;background:#fef2f2;">
+                        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;gap:8px;flex-wrap:wrap;">
+                            <span style="font-size:13px;font-weight:600;color:#b91c1c;">⚠️ 有 <b id="ocrFailCount">0</b> 张图片没识别出账单（本次共 <span id="ocrFailTotal">0</span> 张，识别成功 <span id="ocrFailOk">0</span> 张）</span>
+                            <span style="display:flex;gap:6px;flex-wrap:wrap;">
+                                <button class="btn btn-primary btn-sm" id="ocrFailRetryBtn" onclick="retryFailedBatchImages()">🔁 重试这 <span id="ocrFailRetryCount">0</span> 张</button>
+                                <button class="btn btn-outline btn-sm" onclick="clearFailedBatchImages()">全部忽略</button>
+                            </span>
+                        </div>
+                        <div class="ocr-batch-strip" id="ocrBatchFailStrip" style="display:flex;flex-wrap:wrap;gap:8px;"></div>
+                        <p class="hint" style="margin-top:8px;font-size:11px;color:#b91c1c;">下面是没识别出账单的图片（带原图缩略图，可对照原图确认）。点「🎯 单独识别」只重识别这一张，结果会自动追加到已识别的账单里。</p>
+                    </div>
                     <p class="file-name" id="selectedFileName"></p>
                     <div class="camera-container" id="cameraContainer" style="display:none;">
                         <video id="cameraVideo" autoplay playsinline></video>
@@ -593,6 +605,19 @@ async function handleRequest(request) {
                     <div class="ocr-progress" id="ocrProgress" style="display:none;">
                         <div class="ocr-spinner"></div>
                         <p id="ocrProgressText">解析识别中...</p>
+                        <!-- 批量识别的详细进度：当前第几张 + 当前图缩略图 + 进度条 -->
+                        <div class="ocr-batch-prog" id="ocrBatchProgress" style="display:none;">
+                            <div class="ocr-batch-prog-row">
+                                <img id="ocrBatchProgThumb" class="ocr-batch-prog-thumb" alt="">
+                                <div class="ocr-batch-prog-info">
+                                    <div class="ocr-batch-prog-title" id="ocrBatchProgTitle">正在识别第 1 张 / 共 1 张</div>
+                                    <div class="ocr-batch-prog-name" id="ocrBatchProgName"></div>
+                                    <div class="ocr-batch-prog-engine" id="ocrBatchProgEngine"></div>
+                                </div>
+                            </div>
+                            <div class="ocr-batch-prog-bar"><div class="ocr-batch-prog-bar-in" id="ocrBatchProgBar"></div></div>
+                            <div class="ocr-batch-prog-stat" id="ocrBatchProgStat"></div>
+                        </div>
                     </div>
                 </div>
                 <div class="form-group paste-area">
@@ -800,6 +825,11 @@ async function handleRequest(request) {
             <div class="review-head">
                 <h3>👁 逐张核对账单</h3>
                 <button class="btn-close" onclick="closeReviewOverlay()">✕</button>
+            </div>
+            <!-- 未识别成功的图片提示（批量识别有失败时显示） -->
+            <div class="review-fail-bar" id="rvFailBar" style="display:none;">
+                <span>⚠️ 有 <b id="rvFailNum">0</b> 张图片没识别出账单，这几张没有被导入</span>
+                <button class="btn btn-outline btn-sm" onclick="rvShowFailPanel()">查看并重试</button>
             </div>
             <div class="review-subbar">
                 <span id="rvVerifiedCount">已核对 0 / 0</span>
@@ -1165,7 +1195,7 @@ async function handleRequest(request) {
     <!-- Toast 提示 -->
     <div class="toast" id="toast"></div>
 
-    <script src="app.js?v=65"></script>
+    <script src="app.js?v=66"></script>
     <script>
     (function(){
         function showForgot(){
