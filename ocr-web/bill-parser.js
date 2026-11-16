@@ -5,7 +5,7 @@
 const RE_DATE_CN = /(?:(\d{4})\s*年)?\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日/;
 const RE_DATE_FULL = /(?:(\d{4})\s*[-/.])?\s*(\d{1,2})\s*[-/.]\s*(\d{1,2})(?![.\d])/;
 const RE_TIME = /(\d{1,2})\s*[:：]\s*(\d{1,2})(?:\s*[:：]\s*\d{1,2})?/;
-const RE_AMOUNT = /^([+\-])?\s*[¥￥]?\s*([\d,]+(?:\.\d{1,2})?)\s*(?:元)?$/;
+const RE_AMOUNT = /^([+\-])?\s*[¥￥]?\s*([+\-])?\s*([\d,]+(?:\.\d{1,2})?)\s*(?:元)?$/;
 const RE_JUNK = /^[\sA-Za-z0-9:：/\\\-_.+*#]{1,6}$/;
 
 const NOISE_PATTERNS = [
@@ -28,8 +28,14 @@ const NOISE_PATTERNS = [
   /^\d{1,2}\s*月\s*\d{4}\s*年\s*$/,
 ];
 
+// 收支方向关键词
+//  EXPENSE_HINTS：明确的支出语义（用于金额符号被 OCR 丢掉时的兜底）
+//  INCOME_HINTS ：明确的收入语义
+// 注意：「手续费 / 服务费」不在这里，由 decideType 第 1 步单独判定（要区分是否同时含收入语义）
+const EXPENSE_HINTS = ['转给', '付款', '支付', '扫码', '消费', '购买', '取现',
+  '提现', '还款', '充值', '缴费', '交费', '扣款', '扣除', '支出', '发出红包', '借方'];
 const INCOME_HINTS = ['收款', '收到', '转入', '退款', '红包', '入账', '工资', '利息',
-  '报销', '返现', '来自', '收入'];
+  '报销', '返现', '来自', '收入', '收款码', '贷方', '存入'];
 
 function norm(s) {
   s = (s || '').trim();
@@ -85,8 +91,9 @@ function parseAmount(s) {
   const compact = s.replace(/\s+/g, '');
   const m = RE_AMOUNT.exec(compact);
   if (!m) return null;
-  const sign = m[1];
-  const num = m[2].replace(/,/g, '');
+  // 负号可能在货币符号前或后：「-40.00」「-¥40.00」「¥-40.00」都要认
+  const sign = m[1] || m[2] || '';
+  const num = m[3].replace(/,/g, '');
   const hasDec = num.indexOf('.') >= 0;
   const hasCur = compact.startsWith('¥') || compact.startsWith('￥') || compact.indexOf('元') >= 0;
   if (!(sign || hasDec || hasCur)) return null;
@@ -98,10 +105,10 @@ function parseAmount(s) {
 }
 
 function findAmountTail(s) {
-  const m = /([+\-])?\s*[¥￥]?\s*([\d,]+\.\d{1,2})\s*(?:元)?$/.exec(s);
+  const m = /([+\-])?\s*[¥￥]?\s*([+\-]?)\s*([\d,]+\.\d{1,2})\s*(?:元)?$/.exec(s);
   if (!m) return null;
   try {
-    return [m[1], parseFloat(m[2].replace(/,/g, '')), s.slice(0, m.index)];
+    return [m[1] || m[2] || '', parseFloat(m[3].replace(/,/g, '')), s.slice(0, m.index)];
   } catch (e) { return null; }
 }
 
@@ -171,12 +178,30 @@ function isStruckPriceItem(it, all) {
   return false;
 }
 
+// 收支方向判定（与 app.js 的 decideBillType 规则保持一致）
+//   1) 「手续费」无条件支出——信用卡/贷款手续费只可能是支出，绝不可能是收入
+//   2) 金额带符号：'-' = 支出，'+' = 收入（账单上带负号的一定是支出）
+//   3) 金额无符号（符号被 OCR 丢掉）时按备注语义兜底：
+//        支出语义词（转给/付款/扫码/消费/还款…）→ 支出
+//        收入语义词（来自/收款/入账…）→ 收入
+//   4) 仍判断不出：账单上无符号的金额基本都是收入 → 收入
 function decideType(sign, desc, forced) {
   if (forced === '收入' || forced === '支出') return forced;
-  if (sign === '+') return '收入';
+  const d = String(desc || '');
+  // 1) 手续费 / 服务费无条件支出（备注里同时出现收入语义词时除外）
+  if (d.indexOf('手续费') >= 0 || d.indexOf('服务费') >= 0) {
+    let hasIncomeWord = false;
+    for (const k of INCOME_HINTS) { if (d.indexOf(k) >= 0) { hasIncomeWord = true; break; } }
+    if (!hasIncomeWord) return '支出';
+  }
+  // 2) 符号优先
   if (sign === '-') return '支出';
-  if (desc && INCOME_HINTS.some((k) => desc.indexOf(k) >= 0)) return '收入';
-  return '支出';
+  if (sign === '+') return '收入';
+  // 3) 无符号 → 备注语义兜底
+  for (const k of EXPENSE_HINTS) if (d.indexOf(k) >= 0) return '支出';
+  for (const k of INCOME_HINTS) if (d.indexOf(k) >= 0) return '收入';
+  // 4) 兜底：无符号金额基本都是收入
+  return '收入';
 }
 
 function mkDate(dinfo, yearHint) {

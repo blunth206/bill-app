@@ -7300,6 +7300,46 @@ function normalizeOcrAmount(amountStr) {
 // ==================== 各类型独立解析器 ====================
 
 // ============================================================
+// 收支方向统一判定（微信/支付宝/Tesseract/本地强模型 共用同一套规则）
+//   1) 账单上带负号的金额一定是支出；带正号的是收入
+//   2) 金额无符号（OCR 把负号/正号丢了）时按备注语义兜底
+//   3) 「手续费 / 服务费」一律支出——信用卡、贷款、分期的手续费只可能是支出，
+//      绝不可能是收入
+//   4) 都判断不出时：无符号金额基本都是收入
+// ============================================================
+// 注意：「手续费 / 服务费」不在这里，由 decideBillType 第 1 步单独判定（要区分是否同时含收入语义）
+var BILL_EXPENSE_HINTS = ['转给', '付款', '支付', '扫码', '消费', '购买',
+  '取现', '提现', '还款', '充值', '缴费', '交费', '扣款', '扣除', '支出', '发出红包', '借方'];
+var BILL_INCOME_HINTS = ['收款', '收到', '转入', '退款', '红包', '入账', '工资', '利息',
+  '报销', '返现', '来自', '收入', '收款码', '贷方', '存入'];
+
+function decideBillType(sign, note, forced) {
+  if (forced === '收入' || forced === '支出') return forced;
+  var n = String(note || '');
+  // 1) 手续费 / 服务费无条件支出
+  //    （若备注里同时出现收入语义词，说明这行其实是一条收款，交给下面的规则判断）
+  if (n.indexOf('手续费') >= 0 || n.indexOf('服务费') >= 0) {
+    var hasIncomeWord = false;
+    for (var f = 0; f < BILL_INCOME_HINTS.length; f++) {
+      if (n.indexOf(BILL_INCOME_HINTS[f]) >= 0) { hasIncomeWord = true; break; }
+    }
+    if (!hasIncomeWord) return '支出';
+  }
+  // 2) 符号优先
+  if (sign === '-') return '支出';
+  if (sign === '+') return '收入';
+  // 3) 无符号 → 备注语义兜底
+  for (var i = 0; i < BILL_EXPENSE_HINTS.length; i++) {
+    if (n.indexOf(BILL_EXPENSE_HINTS[i]) >= 0) return '支出';
+  }
+  for (var j = 0; j < BILL_INCOME_HINTS.length; j++) {
+    if (n.indexOf(BILL_INCOME_HINTS[j]) >= 0) return '收入';
+  }
+  // 4) 兜底：无符号金额基本都是收入
+  return '收入';
+}
+
+// ============================================================
 // 🔒【锁定】parseWeChatBill：微信账单列表解析（勿改，已精调）
 //   - 向上追溯找日期行（日期在交易行上方）
 //   - 移除行内日期/时间避免误判金额
@@ -7362,15 +7402,13 @@ function parseWeChatBill(lines, today, currentYear) {
             .trim();
         if (!note || !/[\u4e00-\u9fa5]/.test(note)) note = 'OCR识别';
 
-        // 类型判断
-        var type = '支出';
-        if (lastAmountStr.indexOf('+') !== -1) {
-            type = '收入';
-        } else if (lastAmountStr.indexOf('-') !== -1) {
-            type = '支出';
-        } else if (/来自|二维码收款|入账|收款|收入/.test(note)) {
-            type = '收入';
-        }
+        // 类型判断（统一规则 decideBillType）：
+        //   '-金额'一定是支出，'+金额'是收入；无符号时按备注语义兜底；
+        //   「手续费」一律支出（信用卡手续费不可能是收入）
+        var type = decideBillType(
+            lastAmountStr.indexOf('+') !== -1 ? '+' : (lastAmountStr.indexOf('-') !== -1 ? '-' : ''),
+            note
+        );
 
         // 日期解析：微信账单列表日期通常在交易行上方（独立日期行），或行内
         var date = today;
@@ -7459,13 +7497,13 @@ function parseAlipayBill(lines, today, currentYear) {
             var yuanMatch = lineForAmount.match(/[¥￥]\s*([\d,]+(?:\.\d{1,2})?)/);
             if (yuanMatch) {
                 amt = parseFloat(yuanMatch[1].replace(/,/g, ''));
-                type = /收入|入账|退款/.test(lineForAmount) ? '收入' : '支出';
+                type = decideBillType('', lineForAmount);
             } else {
                 // 最后尝试纯数字金额（至少x.xx格式）
                 var numMatch = lineForAmount.match(/([\d,]+\.\d{2})/);
                 if (numMatch) {
                     amt = parseFloat(numMatch[1].replace(/,/g, ''));
-                    type = /收入|入账|退款/.test(lineForAmount) ? '收入' : '支出';
+                    type = decideBillType('', lineForAmount);
                 }
             }
         }
@@ -7560,7 +7598,7 @@ function parseBankStatement(lines, today, currentYear) {
             var yuanMatch = amountLine.match(/[¥￥Y]?\s*([\d\s.,]+\.\d{2})/);
             if (yuanMatch) {
                 amt = parseFloat(normalizeOcrAmount(yuanMatch[1]));
-                type = /收入|存入|转入|贷方/.test(amountLine) ? '收入' : '支出';
+                type = decideBillType('', amountLine);
             }
         }
         if (!amt || isNaN(amt) || Math.abs(amt) < 0.01) continue;
