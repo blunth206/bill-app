@@ -3324,6 +3324,10 @@ function onImportUserChange() {
     if (window._previewBills && window._previewBills.length) {
         showPreview(window._previewBills, v);
         showToast('已选择账单户，可以点「确认导入」了', 'success');
+    } else {
+        // 还没识别出账单，先把「确认导入」解禁（识别完会再按账单户状态刷新）
+        var cbtn = document.getElementById('confirmImportBtn');
+        if (cbtn) cbtn.disabled = false;
     }
 }
 
@@ -4655,6 +4659,15 @@ function checkDuplicates(bills, userId) {
         if (ref && ref.userId) {
             matchedUser = APP_DATA.billUsers.find(function(u) { return u.id === ref.userId; }) || null;
         }
+        // 账单户名：① 账户存在 → 名称；② 账户已被删除 → 明确提示；③ 批次内重复（没带账户）→ 用本批次账户
+        var matchedUserName = '';
+        if (matchedUser) {
+            matchedUserName = matchedUser.name;
+        } else if (ref && ref.userId) {
+            matchedUserName = '(账户已删除)';
+        } else if (ref) {
+            matchedUserName = uid ? (_billUserName(uid) || '(未选账户)') : '(未选账户)';
+        }
         return {
             isDuplicate: !!ref,
             noteMatch: noteMatch,
@@ -4666,7 +4679,7 @@ function checkDuplicates(bills, userId) {
             matchedType: ref ? (ref.type || '') : '',
             matchedAmount: ref ? (ref.amount || 0) : 0,
             matchedUserId: ref ? (ref.userId || '') : '',
-            matchedUserName: matchedUser ? matchedUser.name : ''
+            matchedUserName: matchedUserName
         };
     });
 }
@@ -4705,14 +4718,15 @@ function _billUserName(uid) {
 }
 
 // 重复标记（备注列里的小标签）
+// 注意：确认重复(备注匹配)和疑似重复都要能点开「重复记录对比」弹窗
 function _dupBadgeHtml(idx, dr) {
     if (!dr || !dr.isDuplicate) return '';
     var crossTip = dr.crossUser
-        ? '；这笔在其他账单户【' + (dr.matchedUserName || '未知') + '】下已存在，可能选错了账单户'
+        ? '；这笔在其他账单户【' + (dr.matchedUserName || '未知账户') + '】下已存在，可能选错了账单户'
         : '';
     var crossMark = dr.crossUser ? '·他户' : '';
     if (dr.noteMatch) {
-        return ' <span class="dup-icon" title="与已有记录重复（备注匹配）：' + escapeHtml(dr.matchedNote || '无备注') + crossTip + '">⚠️重复' + crossMark + '</span>';
+        return ' <span class="dup-icon" title="与已有记录重复（备注匹配）：' + escapeHtml(dr.matchedNote || '无备注') + crossTip + '｜点击查看对比详情" onclick="event.stopPropagation();showDupCompare(' + idx + ');" style="cursor:pointer;">⚠️重复' + crossMark + '</span>';
     }
     return ' <span class="dup-icon-suspect" title="点击查看对比详情' + crossTip + '" onclick="event.stopPropagation();showDupCompare(' + idx + ');" style="cursor:pointer;">⚠️疑似' + crossMark + '</span>';
 }
@@ -4881,7 +4895,8 @@ function showPreview(bills, userId) {
     // 学习修正信息栏
     updateLearnInfoBar(hasLearning);
 
-    document.getElementById('confirmImportBtn').disabled = false;
+    // 没选账单户 → 不允许导入（按钮置灰，选好账单户后自动解禁）
+    document.getElementById('confirmImportBtn').disabled = !userId;
     updateReviewBtn();
 }
 
@@ -5085,7 +5100,7 @@ function showDupCompare(idx) {
             '<table class="dup-compare-table">' +
                 '<thead><tr><th>字段</th><th class="dup-col-existing">已有记录</th><th class="dup-col-current">当前导入</th></tr></thead>' +
                 '<tbody>' +
-                    '<tr><td>账单户</td><td class="dup-col-existing">' + escapeHtml(dr.matchedUserName || '(未知)') + '</td><td class="dup-col-current">' + escapeHtml(_billUserName(window._previewUserId) || '(未选)') + '</td></tr>' +
+                    '<tr><td>账单户</td><td class="dup-col-existing">' + escapeHtml(dr.matchedUserName || '(未知)') + '</td><td class="dup-col-current">' + escapeHtml(_billUserName(bill.userId || window._previewUserId) || '(未选)') + '</td></tr>' +
                     '<tr><td>日期</td><td class="dup-col-existing">' + escapeHtml(dr.matchedDate) + '</td><td class="dup-col-current">' + escapeHtml(bill.date) + '</td></tr>' +
                     '<tr><td>类型</td><td class="dup-col-existing">' + typeLabel(dr.matchedType) + '</td><td class="dup-col-current">' + typeLabel(bill.type) + '</td></tr>' +
                     '<tr><td>金额</td><td class="dup-col-existing dup-amount">¥' + dr.matchedAmount + '</td><td class="dup-col-current dup-amount">¥' + bill.amount + '</td></tr>' +
@@ -5093,7 +5108,7 @@ function showDupCompare(idx) {
                 '</tbody>' +
             '</table>' +
             '<div class="dup-compare-actions">' +
-                (dr.crossUser && dr.matchedUserId
+                (dr.crossUser && dr.matchedUserId && APP_DATA.billUsers.some(function(u) { return u.id === dr.matchedUserId; })
                     ? '<button class="dup-compare-btn btn-confirm" onclick="closeDupCompare();switchImportUser(\'' + dr.matchedUserId + '\')">🔁 改用【' + escapeHtml(dr.matchedUserName || '该') + '】账单户导入</button>'
                     : '') +
                 '<button class="dup-compare-btn btn-confirm" onclick="resolveDupResult(' + idx + ', \'confirm\')">✅ 确认重复</button>' +
