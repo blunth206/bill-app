@@ -4776,6 +4776,11 @@ function renderDupWarningBar() {
         }
     }
 
+    // 操作指引：确认重复也能改判为「不是重复」（同一客户同一天两笔同额款项是正常的）
+    html += '<div style="margin-top:4px;font-size:12px;color:#64748b;">'
+        + '点行内的 <b>⚠️重复</b> / <b>⚠️疑似</b> 标签可查看对比，并可选择「不是重复」——'
+        + '同一客户同一天付了两笔相同金额的款项属于正常情况，选「不是重复」两笔都会导入。</div>';
+
     if (dupWarnText) dupWarnText.innerHTML = html;
     dupBar.style.display = 'flex';
     if (removeDupBtn) removeDupBtn.style.display = '';
@@ -4834,6 +4839,20 @@ function showPreview(bills, userId) {
 
     // 检测重复
     var dupResults = _checkDuplicatesMixed(bills, userId);
+    // 应用用户手动判定（确认重复 / 不是重复），避免重新渲染时把用户的判定冲掉
+    if (window._dupOverrides) {
+        Object.keys(window._dupOverrides).forEach(function(k) {
+            var i = parseInt(k, 10);
+            if (!dupResults[i]) return;
+            if (window._dupOverrides[k] === 'confirm') {
+                dupResults[i].isDuplicate = true;
+                dupResults[i].noteMatch = true;
+            } else if (window._dupOverrides[k] === 'dismiss') {
+                dupResults[i].isDuplicate = false;
+                dupResults[i].noteMatch = false;
+            }
+        });
+    }
     window._dupResults = dupResults;
     var dupCount = dupResults.filter(function(d) { return d.isDuplicate; }).length;
     var exactDupCount = dupResults.filter(function(d) { return d.isDuplicate && d.noteMatch; }).length;
@@ -5111,10 +5130,12 @@ function showDupCompare(idx) {
                 (dr.crossUser && dr.matchedUserId && APP_DATA.billUsers.some(function(u) { return u.id === dr.matchedUserId; })
                     ? '<button class="dup-compare-btn btn-confirm" onclick="closeDupCompare();switchImportUser(\'' + dr.matchedUserId + '\')">🔁 改用【' + escapeHtml(dr.matchedUserName || '该') + '】账单户导入</button>'
                     : '') +
-                '<button class="dup-compare-btn btn-confirm" onclick="resolveDupResult(' + idx + ', \'confirm\')">✅ 确认重复</button>' +
-                '<button class="dup-compare-btn btn-dismiss" onclick="resolveDupResult(' + idx + ', \'dismiss\')">❌ 不是重复</button>' +
+                '<button class="dup-compare-btn btn-confirm" onclick="resolveDupResult(' + idx + ', \'confirm\')" title="这两笔是同一条，导入时会自动跳过">✅ 确认重复（跳过这条）</button>' +
+                '<button class="dup-compare-btn btn-dismiss" onclick="resolveDupResult(' + idx + ', \'dismiss\')" title="这两笔都是真实存在的（如同一客户同一天付了两笔同额款项），两笔都会导入">❌ 不是重复（两笔都保留）</button>' +
                 '<button class="dup-compare-btn btn-cancel" onclick="closeDupCompare()">关闭</button>' +
             '</div>' +
+            '<div class="dup-compare-tip">同一个客户同一天付了两笔相同金额的款项是正常的，' +
+            '只要两笔都真实存在，就选「不是重复」，两笔都会导入。</div>' +
         '</div>';
     
     document.body.appendChild(modal);
@@ -5686,7 +5707,9 @@ function confirmImport() {
         if (existDupCount > 0) tip += '· 与已有账单重复：' + existDupCount + ' 条\n';
         if (crossDupCount > 0) tip += '· 其中 ' + crossDupCount + ' 条在「其他账单户」下已存在，可能选错账单户\n';
         if (batchDupCount > 0) tip += '· 本次导入内部重复：' + batchDupCount + ' 条\n';
-        tip += '\n点「确定」自动跳过这些重复，只导入其余 ' + (bills.length - dupCount) + ' 条；\n点「取消」返回预览检查（可用「排除重复」或手动删行）。';
+        tip += '\n点「确定」自动跳过这些重复，只导入其余 ' + (bills.length - dupCount) + ' 条；\n'
+            + '点「取消」返回预览，点行内的 ⚠️重复 / ⚠️疑似 标签可逐条查看对比，\n'
+            + '若两笔都真实存在（如同一客户同一天付了两笔同额款项），选「不是重复」两笔都会导入。';
         if (!confirm(tip)) return;
     }
 
