@@ -822,7 +822,7 @@ async function handleRequest(request) {
                 <div class="review-right">
                     <div class="review-cap review-cap-split">
                         <span>识别结果 <b id="rvRowCount">0</b> 条 · 可直接修改</span>
-                        <button class="rv-verify-btn" id="rvVerifyBtn" onclick="rvToggleVerified()">○ 本张已核对</button>
+                        <button class="rv-verify-btn" id="rvVerifyBtn" onclick="rvToggleVerified()" title="标记本张已核对，并自动进入下一张">○ 本张已核对 →</button>
                     </div>
                     <div class="rv-rows" id="rvRows"></div>
                 </div>
@@ -1132,7 +1132,7 @@ async function handleRequest(request) {
     <!-- Toast 提示 -->
     <div class="toast" id="toast"></div>
 
-    <script src="app.js?v=60"></script>
+    <script src="app.js?v=61"></script>
     <script>
     (function(){
         function showForgot(){

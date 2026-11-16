@@ -3741,7 +3741,10 @@ function renderReview() {
     var vbtn = document.getElementById('rvVerifyBtn');
     if (vbtn) {
         if (g.verified) { vbtn.classList.add('done'); vbtn.textContent = '✓ 本张已核对'; }
-        else { vbtn.classList.remove('done'); vbtn.textContent = '○ 本张已核对'; }
+        else { vbtn.classList.remove('done'); vbtn.textContent = '○ 本张已核对 →'; }
+        vbtn.title = g.verified
+            ? '已核对；再次点击可取消标记（不会翻页）'
+            : '标记本张已核对，并自动进入下一张';
     }
     var prevBtn = document.getElementById('rvPrev'); if (prevBtn) prevBtn.disabled = (gi <= 0);
     var nextBtn = document.getElementById('rvNext'); if (nextBtn) nextBtn.disabled = (gi >= total - 1);
@@ -3812,14 +3815,33 @@ function rvDeleteRow(gi) {
 }
 
 // 标记 / 取消标记这张图已核对
+// 需求：点击「本张已核对」= 标记已核对 + 直接进入下一张（连续核对更顺手）
+//      再次点击（取消标记）不会跳页，避免来回跳动
 function rvToggleVerified() {
     var groups = window._reviewGroups || [];
-    var g = groups[window._reviewIdx || 0];
+    var gi = window._reviewIdx || 0;
+    var g = groups[gi];
     if (!g) return;
+    var wasVerified = !!g.verified;
     g.verified = !g.verified;
     window._rvVerified = window._rvVerified || {};
     window._rvVerified[g.key] = g.verified;
     g.rows.forEach(function(it) { if (it.b) it.b._verified = g.verified; });
+
+    if (!wasVerified && g.verified) {
+        // 标记成功 → 自动翻到下一张
+        if (gi < groups.length - 1) {
+            window._reviewIdx = gi + 1;
+            window._rvZoom = false;
+            renderReview();
+            showToast('已核对第 ' + (gi + 1) + ' 张 · 进入第 ' + (gi + 2) + ' 张', 'success', 1600);
+            return;
+        }
+        // 已经是最后一张
+        renderReview();
+        showToast('已核对第 ' + (gi + 1) + ' 张（已是最后一张）', 'success', 2200);
+        return;
+    }
     renderReview();
 }
 
