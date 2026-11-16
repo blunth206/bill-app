@@ -3375,6 +3375,20 @@ div[id*="eop-banner"],
 }
 .rv-user-btn:hover { background: #f5f3ff; }
 
+/* 核对界面顶栏：复制图片文本 / 复制识别结果 */
+.rv-copy-btn {
+    padding: 4px 10px;
+    font-size: 12px;
+    font-weight: 600;
+    color: #0f766e;
+    background: #fff;
+    border: 1px solid #99f6e4;
+    border-radius: 999px;
+    cursor: pointer;
+    white-space: nowrap;
+}
+.rv-copy-btn:hover { background: #f0fdfa; }
+
 /* 批量更改账户号弹窗 */
 .rv-scope-opt { display: flex; align-items: center; gap: 6px; font-size: 13px; color: #334155; margin: 6px 0; cursor: pointer; }
 .rv-scope-opt b { color: #2F80ED; }

@@ -3811,6 +3811,74 @@ function rvEdit(gi, field, el) {
     if (typeof recheckDuplicates === 'function') recheckDuplicates();
 }
 
+// ==================== 核对界面：复制图片文本 ====================
+// 取当前正在核对的那张图
+function _rvCurrentGroup() {
+    var groups = (window._reviewGroups && window._reviewGroups.length) ? window._reviewGroups : buildReviewGroups();
+    return groups[window._reviewIdx || 0] || null;
+}
+
+// 当前这张图的 OCR 原始文字（同一张图的账单共用同一份原文）
+function _rvGroupRawText(g) {
+    if (!g) return '';
+    var text = '';
+    g.rows.forEach(function (it) {
+        var t = it.b && it.b._srcText;
+        if (t && text.indexOf(t) === -1) text = t;
+    });
+    return text || '';
+}
+
+// 通用复制（优先 Clipboard API，失败回退 execCommand）
+function _rvCopyToClipboard(text, okMsg) {
+    function fallback() {
+        var ta = document.createElement('textarea');
+        ta.value = text;
+        ta.setAttribute('readonly', '');
+        ta.style.position = 'fixed';
+        ta.style.left = '-9999px';
+        ta.style.top = '0px';
+        document.body.appendChild(ta);
+        ta.select();
+        ta.setSelectionRange(0, 999999);
+        var ok = false;
+        try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+        document.body.removeChild(ta);
+        showToast(ok ? okMsg : '复制失败，请手动选择文本复制', ok ? 'success' : 'error');
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(function () {
+            showToast(okMsg, 'success');
+        }).catch(fallback);
+    } else {
+        fallback();
+    }
+}
+
+// 复制当前这张图片里的原始文字（OCR 原文）
+function rvCopyRawText() {
+    var g = _rvCurrentGroup();
+    if (!g) { showToast('没有可复制的图片', 'info'); return; }
+    var text = _rvGroupRawText(g);
+    if (!text) { showToast('这张图没有留存原始文本', 'info'); return; }
+    _rvCopyToClipboard(text, '图片文本已复制（' + text.length + ' 字）');
+}
+
+// 复制当前这张图识别出的账单（制表符分隔，可直接粘到 Excel）
+function rvCopyResultText() {
+    var g = _rvCurrentGroup();
+    if (!g || !g.rows.length) { showToast('这张图没有识别结果', 'info'); return; }
+    var lines = ['日期\t账单户\t收支\t金额\t备注'];
+    g.rows.forEach(function (it) {
+        var b = it.b || {};
+        var u = _rvUserOf(b);
+        var sign = b.type === '收入' ? '+' : (b.type === '结余' ? '' : '-');
+        var amt = (typeof _formatAmount === 'function') ? _formatAmount(b.amount) : String(b.amount || '');
+        lines.push([b.date || '', u.name, b.type || '', sign + amt, b.note || ''].join('\t'));
+    });
+    _rvCopyToClipboard(lines.join('\n'), '识别结果已复制（' + g.rows.length + ' 条）');
+}
+
 // ==================== 核对界面：更改账户号 ====================
 // 说明：这里的改动只作用于「逐张核对」里的识别结果（window._previewBills），
 //       不会去动已经入库的账单；导入时每条账单按自己的 userId 归属。
