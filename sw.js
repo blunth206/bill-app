@@ -1,5 +1,5 @@
 // Service Worker - PWA 离线缓存（v20：CDN资源缓存，支持弱网/离线启动）
-const CACHE_NAME = 'jizhang-v62';
+const CACHE_NAME = 'jizhang-v63';
 const FILES_TO_CACHE = [
   '.',
   'index.html',
@@ -62,7 +62,10 @@ self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then((keys) => {
       return Promise.all(
-        keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key))
+        // 只清理本应用自己的旧版本缓存（jizhang-*）。
+        // ⚠️ 不能「删掉除当前缓存外的所有缓存」——本地强模型的模型缓存（ocr-models-*）
+        //    存在 Cache Storage 里，会被一起删掉，导致模型每次都要重新下载 30MB。
+        keys.filter((key) => key !== CACHE_NAME && /^jizhang-/.test(key)).map((key) => caches.delete(key))
       );
     })
   );
@@ -83,6 +86,26 @@ self.addEventListener('fetch', (event) => {
   }
 
   const url = new URL(event.request.url);
+
+  // OCR 运行时与模型（/ocr-web/）：交给「本地强模型缓存」ocr-models-v1 管理
+  //   - 优先读缓存 → 断网也能跑本地强模型
+  //   - 不要塞进应用壳缓存（那会把 40MB 模型重复存一份）
+  if (url.pathname.includes('/ocr-web/')) {
+    event.respondWith(
+      caches.open('ocr-models-v1').then((mc) => mc.match(event.request)).then((cached) => {
+        if (cached) return cached;
+        return fetchWithTimeout(event.request, 180000).then((response) => {
+          if (response && response.ok) {
+            const clone = response.clone();
+            caches.open('ocr-models-v1').then((c) => c.put(event.request, clone));
+          }
+          return response;
+        });
+      })
+    );
+    return;
+  }
+
   const isCore = /\/(app\.js|index\.html|style\.css|manifest\.json|reset\.html|reset-pwd\.html)$/.test(url.pathname);
   const isCdn = /(cdn\.|jsdelivr\.net|unpkg\.com|cdnjs\.cloudflare\.com)/.test(event.request.url) && /\.js$/.test(event.request.url);
 

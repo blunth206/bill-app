@@ -6562,7 +6562,7 @@ function ocrRecognize(imageDataUrl, options) {
             return result;
         }).catch(function(err) {
             console.warn('[OCR引擎] 本地强模型(浏览器)识别失败，回退到Tesseract:', err.message);
-            showToast('⚠️ 本地强模型加载失败(' + err.message.substr(0, 60) + ')，已回退到本地识别', 'warn', 5000);
+            showToast('⚠️ 本地强模型加载失败：' + (err.message || '未知错误').substr(0, 90) + '，已回退到本地识别', 'warn', 6000);
             window._ocrActualEngine = 'tesseract(fallback)';
             return ocrTesseract(imageDataUrl, options);
         });
@@ -6624,10 +6624,167 @@ function ocrLocal(imageDataUrl) {
 }
 
 // 本地强模型（浏览器端 RapidOCR，无需服务器）：
-//   首次使用动态加载 onnxruntime-web + 三个 ONNX 模型 + 字库（约 30MB，之后浏览器缓存），
+//   首次使用需下载 3 个 ONNX 模型 + 字库（约 30MB）+ onnxruntime-web 运行时（约 11MB wasm），
+//   下载后写入 Cache Storage：再次打开秒开，断网也能用。
 //   在浏览器内完成检测/识别/账单解析，返回结构化 records，与本地模型服务(本地:9001)同款效果。
 var _browserOcrEngine = null;
 var _browserOcrInit = null;
+
+// 模型文件清单（与 ocr-web/models 目录一一对应）
+var _ocrModelFiles = [
+    { key: 'det',   url: 'ocr-web/models/PP-OCRv6_det_small.onnx',               name: '检测模型 PP-OCRv6_det_small' },
+    { key: 'rec',   url: 'ocr-web/models/PP-OCRv6_rec_small.onnx',               name: '识别模型 PP-OCRv6_rec_small' },
+    { key: 'cls',   url: 'ocr-web/models/ch_ppocr_mobile_v2.0_cls_mobile.onnx', name: '方向分类模型 ch_ppocr_mobile_v2.0_cls' },
+    { key: 'vocab', url: 'ocr-web/models/ppocrv6_vocab.txt',                     name: '字库 ppocrv6_vocab' }
+];
+var OCR_MODEL_CACHE = 'ocr-models-v1';
+var OCR_MODEL_TOTAL_MB = 30.5;
+
+// 模型下载进度：有进度条就用进度条，否则用 toast
+function _ocrModelProgress(text) {
+    var el = document.getElementById('ocrProgressText');
+    if (el) el.textContent = text;
+    showToast(text, 'info', 3000);
+}
+
+function _ocrCacheApi() {
+    try { return (typeof caches !== 'undefined') ? caches : null; } catch (e) { return null; }
+}
+
+// 下载单个模型文件：优先读 Cache Storage 缓存；否则流式下载（带进度），下载完写回缓存
+async function _fetchModelFile(absUrl, name, onProgress) {
+    // 注意：caches.open() 返回 Promise<Cache>，必须 await 之后才能用 match/put
+    var cache = null;
+    try {
+        var cs = _ocrCacheApi();
+        if (cs) cache = await cs.open(OCR_MODEL_CACHE);
+    } catch (e) { cache = null; }
+    if (cache) {
+        try {
+            var hit = await cache.match(absUrl);
+            if (hit) {
+                if (onProgress) onProgress(name, 0, 0, true);
+                return new Uint8Array(await hit.arrayBuffer());
+            }
+        } catch (e) { /* 缓存不可用则忽略，走网络下载 */ }
+    }
+    var ctl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+    var timer = null;
+    if (ctl) timer = setTimeout(function () { ctl.abort(); }, 180000);
+    var resp;
+    try {
+        resp = await fetch(absUrl, ctl ? { signal: ctl.signal } : undefined);
+    } catch (e) {
+        if (timer) clearTimeout(timer);
+        var why = (e && e.name === 'AbortError') ? '超时(180秒)'
+                : (e && e.message ? e.message : '网络错误');
+        var host = '';
+        try { host = new URL(absUrl).host; } catch (e2) {}
+        throw new Error(name + ' 下载失败：' + why + (host ? '（请确认网络/代理能访问 ' + host + '）' : ''));
+    }
+    if (timer) clearTimeout(timer);
+    if (!resp.ok) {
+        throw new Error(name + ' 下载失败：HTTP ' + resp.status +
+            (resp.status === 404 ? '（模型文件没部署到线上）' : ''));
+    }
+    var buf;
+    if (resp.body && resp.body.getReader) {
+        var reader = resp.body.getReader();
+        var chunks = [], received = 0, len = 0, i;
+        for (;;) {
+            var r = await reader.read();
+            if (r.done) break;
+            chunks.push(r.value);
+            received += r.value.length;
+            if (onProgress) onProgress(name, received, Number(resp.headers.get('content-length')) || 0, false);
+        }
+        for (i = 0; i < chunks.length; i++) len += chunks[i].length;
+        buf = new Uint8Array(len);
+        var off = 0;
+        for (i = 0; i < chunks.length; i++) { buf.set(chunks[i], off); off += chunks[i].length; }
+    } else {
+        buf = new Uint8Array(await resp.arrayBuffer());
+    }
+    if (cache) {
+        try {
+            await cache.put(absUrl, new Response(buf, {
+                headers: { 'Content-Type': resp.headers.get('content-type') || 'application/octet-stream' }
+            }));
+        } catch (e) {
+            console.warn('[OCR模型] 写入本地缓存失败:', e && e.message);
+        }
+    }
+    return buf;
+}
+
+// 初始化强模型：环境预检 → 下载模型（进度+缓存）→ 建推理会话
+async function _initBrowserOcr(base) {
+    // —— 环境预检：把「加载不到」的最常见原因直接说清楚 ——
+    if (location.protocol === 'file:') {
+        throw new Error('当前是 file:// 直接打开页面，浏览器禁止加载 ES 模块与模型。' +
+            '请用本地服务器打开（node local-server.js）或访问线上 https://blunth206.github.io/bill-app/');
+    }
+    if (typeof WebAssembly === 'undefined') {
+        throw new Error('浏览器不支持 WebAssembly，无法运行本地强模型');
+    }
+    try {
+        // WASM SIMD 支持检测（onnxruntime-web 必需）
+        var simdOK = WebAssembly.validate(new Uint8Array([
+            0,97,115,109,1,0,0,0,1,5,1,96,0,1,123,3,2,1,0,10,10,1,8,0,65,0,253,15,253,98,11]));
+        if (!simdOK) {
+            throw new Error('浏览器不支持 WASM SIMD（onnxruntime-web 必需），请升级浏览器或改用其它识别引擎');
+        }
+    } catch (e) {
+        if (e && /WASM SIMD/.test(e.message || '')) throw e;
+    }
+
+    // —— 1) 下载模型（带进度 + 本地缓存）——
+    var loaded = {};
+    var doneBytes = 0, lastTick = 0;
+    for (var i = 0; i < _ocrModelFiles.length; i++) {
+        var f = _ocrModelFiles[i];
+        var abs = base + f.url;
+        var res = await _fetchModelFile(abs, f.name, function (name, got, total, fromCache) {
+            if (fromCache) return;
+            var now = Date.now();
+            if (now - lastTick < 200) return;
+            lastTick = now;
+            var mb = ((doneBytes + got) / 1048576).toFixed(1);
+            _ocrModelProgress('🧠 正在下载本地强模型 ' + mb + '/' + OCR_MODEL_TOTAL_MB + 'MB…');
+        });
+        loaded[f.key] = res;
+        doneBytes += res.byteLength;
+    }
+
+    // —— 2) 加载推理引擎脚本 ——
+    var engMod, parMod;
+    try {
+        engMod = await import(base + 'ocr-web/rapidocr-engine.js');
+        parMod = await import(base + 'ocr-web/bill-parser.js?v=5');
+    } catch (e) {
+        throw new Error('推理引擎脚本加载失败：' + (e && e.message ? e.message : e) +
+            '（提示模块/MIME 错误通常是 file:// 打开或网络拦截）');
+    }
+
+    // —— 3) 建立推理会话（onnxruntime-web 会再取约 11MB 的 wasm 运行时）——
+    _ocrModelProgress('🧠 正在初始化推理引擎（约11MB运行时）…');
+    var eng = new engMod.RapidOCREngine();
+    try {
+        await eng.init({
+            ortUrl: base + 'ocr-web/ort/ort.wasm.min.mjs',
+            wasmPaths: base + 'ocr-web/ort/',
+            detBytes: loaded.det,
+            recBytes: loaded.rec,
+            clsBytes: loaded.cls,
+            vocabText: (typeof TextDecoder !== 'undefined')
+                ? new TextDecoder('utf-8').decode(loaded.vocab)
+                : String.fromCharCode.apply(null, loaded.vocab)
+        });
+    } catch (e) {
+        throw new Error('推理引擎初始化失败：' + (e && e.message ? e.message : e));
+    }
+    return { eng: eng, parseBills: parMod.parseBills };
+}
 
 // 计算站点根目录（app.js 所在目录），用于把 ocr-web 资源拼成绝对 URL。
 // ⚠️ import() 的 specifier 必须是 './'、'/' 或绝对 URL 开头；
@@ -6643,24 +6800,16 @@ function _ocrAssetBase() {
 
 function ocrBrowser(imageDataUrl) {
     if (!_browserOcrInit) {
-        _browserOcrInit = (async function() {
-            showToast('🧠 正在加载本地强模型（首次需下载约30MB模型，请稍候）…', 'info', 6000);
-            var _base = _ocrAssetBase();
-            var engMod = await import(_base + 'ocr-web/rapidocr-engine.js');
-            var parMod = await import(_base + 'ocr-web/bill-parser.js?v=5');
-            var eng = new engMod.RapidOCREngine();
-            await eng.init({
-                detUrl: _base + 'ocr-web/models/PP-OCRv6_det_small.onnx',
-                recUrl: _base + 'ocr-web/models/PP-OCRv6_rec_small.onnx',
-                clsUrl: _base + 'ocr-web/models/ch_ppocr_mobile_v2.0_cls_mobile.onnx',
-                vocabUrl: _base + 'ocr-web/models/ppocrv6_vocab.txt',
-                ortUrl: _base + 'ocr-web/ort/ort.wasm.min.mjs',
-                wasmPaths: _base + 'ocr-web/ort/'
-            });
-            return { eng: eng, parseBills: parMod.parseBills };
-        })();
+        var _base = _ocrAssetBase();
+        showToast('🧠 正在加载本地强模型（首次需下载约30MB模型，请稍候）…', 'info', 6000);
+        var p = _initBrowserOcr(_base);
+        _browserOcrInit = p;
+        // 失败后清掉缓存的 promise：一次网络抖动不应让整个会话都用不了强模型
+        p.catch(function () { if (_browserOcrInit === p) _browserOcrInit = null; });
     }
     return _browserOcrInit.then(function(mod) {
+        var el = document.getElementById('ocrProgressText');
+        if (el) el.textContent = '模型已就绪，正在识别...';
         var img = new Image();
         img.src = imageDataUrl;
         return img.decode().then(function() {

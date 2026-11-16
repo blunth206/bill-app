@@ -351,11 +351,14 @@ export class RapidOCREngine {
     this.vocab = null; // [blank,'字',...,' ']
   }
 
-  async _loadSession(url, ep) {
-    return this.ort.InferenceSession.create(url, {
+  async _loadSession(url, ep, bytes) {
+    const opts = {
       executionProviders: ep || ['wasm'],
       graphOptimizationLevel: 'all',
-    });
+    };
+    // bytes：调用方已把模型下载到内存（可自带缓存/进度控制）时直接建会话
+    if (bytes) return this.ort.InferenceSession.create(bytes, opts);
+    return this.ort.InferenceSession.create(url, opts);
   }
 
   async init(opts = {}) {
@@ -364,11 +367,14 @@ export class RapidOCREngine {
     if (opts.wasmPaths && this.ort.env && this.ort.env.wasm) this.ort.env.wasm.wasmPaths = opts.wasmPaths;
     if (this.ort.env && this.ort.env.wasm) this.ort.env.wasm.numThreads = 1;
     const o = Object.assign(this.opts, opts);
-    this.sessionDet = await this._loadSession(o.detUrl);
-    this.sessionRec = await this._loadSession(o.recUrl);
-    this.sessionCls = await this._loadSession(o.clsUrl);
+    this.sessionDet = await this._loadSession(o.detUrl, undefined, o.detBytes);
+    this.sessionRec = await this._loadSession(o.recUrl, undefined, o.recBytes);
+    this.sessionCls = await this._loadSession(o.clsUrl, undefined, o.clsBytes);
     // 字库：每行一个字符；按 CTCLabelDecode：blank@0, 原字@1.. , ' '@end
     let raw = o.vocab;
+    if (!Array.isArray(raw) && o.vocabText) {
+      raw = String(o.vocabText).split('\n').map((s) => s.replace(/\r$/, '')).filter((s) => s !== '');
+    }
     if (!Array.isArray(raw) && o.vocabUrl) {
       const txt = await (await fetch(o.vocabUrl)).text();
       raw = txt.split('\n').map((s) => s.replace(/\r$/, '')).filter((s) => s !== '');
